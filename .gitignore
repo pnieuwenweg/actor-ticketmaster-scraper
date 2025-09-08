@@ -5,3 +5,19 @@ node_modules
 
 storage
 response_examples
+
+# Environment variables and secrets
+.env
+.env.local
+.env.production
+*.key
+*-credentials.js
+*-credentials.json
+
+# Apify test files with credentials
+test-*-credentials.js
+supabase-env-vars.js
+
+# Temporary files
+*.tmp
+*.log
