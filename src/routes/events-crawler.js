@@ -122,6 +122,32 @@ async function handleEventsSearchPage(context, {
 
     const events = getEventsFromResponse(items);
     const originalEventCount = events.length;
+    
+    // Debug: Check actual event dates to verify filtering is working
+    if (events.length > 0) {
+        const sampleDates = events.slice(0, 5).map(event => ({
+            name: event.name,
+            localDate: event.localDate,
+            dateTitle: event.dateTitle
+        }));
+        log.info('Sample event dates from this page:', sampleDates);
+        
+        // Check if we have any events before the filter date
+        const filterDate = new Date('2025-11-14');
+        const eventsBeforeFilter = events.filter(event => {
+            if (event.localDate) {
+                const eventDate = new Date(event.localDate);
+                return eventDate < filterDate;
+            }
+            return false;
+        }).length;
+        
+        if (eventsBeforeFilter > 0) {
+            log.warning(`Found ${eventsBeforeFilter} events before filter date (2025-11-14) - date filter may not be working properly`);
+        } else {
+            log.info(`All events are on or after filter date (2025-11-14) - date filter appears to be working`);
+        }
+    }
 
     // handle maxItems restriction if set
     let actualEventsToProcess = events;

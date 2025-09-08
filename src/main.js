@@ -29,6 +29,16 @@ log.info('Actor configuration:', {
     dateFilter: { thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD }
 });
 
+// Debug: Check if date parameters are being properly extracted from input
+log.info('Date filtering debug:', {
+    inputDateFrom: input.dateFrom,
+    inputDateTo: input.dateTo,
+    inputThisWeekendDate: input.thisWeekendDate,
+    extractedDateFrom: dateFrom,
+    extractedDateTo: dateTo,
+    extractedThisWeekendDate: thisWeekendDate
+});
+
 const categories = ['concerts', 'sports', 'arts-theater', 'family'];
 const categoryUrls = categories.map((category) => CATEGORY_PAGE_PREFIX + category);
 
