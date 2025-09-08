@@ -126,7 +126,7 @@ await eventsCrawler.run([startRequest]);
 log.info('Events crawl finished.');
 
 // Add final statistics
-const finalState = await eventsCrawler.useState();
+const finalState = await Actor.getValue('CRAWLER_STATE') || await eventsCrawler.useState();
 log.info('Final crawl statistics:', {
     finalState: finalState
 });
@@ -138,8 +138,8 @@ const { totalScrapedEvents, lastEventDate, hitApiLimit } = finalState;
 log.info('=== CRAWL SUMMARY ===');
 if (hitApiLimit) {
     log.info('This crawl hit Ticketmaster API pagination limits.');
-    log.info(`Successfully scraped ${totalScrapedEvents} events.`);
-    log.info(`Last event date processed: ${lastEventDate}`);
+    log.info(`Successfully scraped ${totalScrapedEvents || 0} events.`);
+    log.info(`Last event date processed: ${lastEventDate || 'Not available'}`);
     
     if (autoContinue && lastEventDate) {
         log.info('Auto-continue is enabled. Preparing continuation run...');
@@ -166,7 +166,7 @@ if (hitApiLimit) {
     }
 } else {
     log.info('Crawl completed successfully - all available events were scraped.');
-    log.info(`Total events scraped: ${totalScrapedEvents}`);
+    log.info(`Total events scraped: ${totalScrapedEvents || 0}`);
 }
 
 log.info('Ticketmaster API limits: ~1200-1400 events per run (6-7 pages).');

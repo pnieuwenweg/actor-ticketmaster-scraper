@@ -99,11 +99,16 @@ async function handleEventsSearchPage(context, {
         log.info(`Successfully scraped ${scrapedItems} events from ${userData.page + 1} pages before API limitation.`);
         
         // Mark as hitting API limit and update state
-        await context.crawler.useState({
+        const limitState = {
             ...state,
             hitApiLimit: true,
             totalScrapedEvents: scrapedItems
-        });
+        };
+        
+        await context.crawler.useState(limitState);
+        
+        // Also save to Actor key-value store for persistence
+        await Actor.setValue('CRAWLER_STATE', limitState);
         
         return;
     }
@@ -211,11 +216,16 @@ async function handleEventsSearchPage(context, {
     }
     
     // Update state with current progress
-    await context.crawler.useState({
+    const newState = {
         ...state,
         totalScrapedEvents: totalScrapedItems,
         lastEventDate: newLastEventDate
-    });
+    };
+    
+    await context.crawler.useState(newState);
+    
+    // Also save to Actor key-value store for persistence
+    await Actor.setValue('CRAWLER_STATE', newState);
     
     log.info(`
     Total results available: ${page.totalElements}
@@ -265,12 +275,17 @@ async function handleEventsSearchPage(context, {
         }
         
         // Update final state
-        await context.crawler.useState({
+        const finalState = {
             ...state,
             hitApiLimit: hitLimit,
             totalScrapedEvents: totalScrapedItems,
             lastEventDate: newLastEventDate
-        });
+        };
+        
+        await context.crawler.useState(finalState);
+        
+        // Also save to Actor key-value store for persistence
+        await Actor.setValue('CRAWLER_STATE', finalState);
     }
 }
 
