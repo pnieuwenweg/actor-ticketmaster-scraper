@@ -1,621 +1,512 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-
-interface SupabaseEventRow {
-  id?: string;
-  ticketmaster_id?: string;
-  name?: string;
-  type?: string;
-  test?: boolean;
-  url?: string;
-  locale?: string;
-  images?: any[];
-  distance?: number;
-  units?: string;
-  sales?: any;
-  dates?: any;
-  classifications?: any[];
-  outlet_id?: string;
-  venue_id?: string;
-  attractions?: any[];
-  price_ranges?: any[];
-  products?: any[];
-  seat_map?: any;
-  accessibility?: any;
-  ticket_limit?: any;
-  age_restrictions?: any;
-  code?: string;
-  please_note?: string;
-  info?: string;
-  promoter?: any;
-  promoters?: any[];
-  social?: any;
-  box_office_info?: any;
-  general_info?: any;
-  external_links?: any;
-  version?: string;
-  updated_at?: string;
-  raw_event_data?: any;
-  apify_run_id?: string;
-}
-
-interface GeneralEventRow {
-  event_id?: string;
-  title?: string;
-  description?: string;
-  website_url?: string;
-  location?: string | null; // PostGIS geometry
-  location_name?: string;
-  event_start_date?: string | null;
-  event_end_date?: string | null;
-  event_start_time?: string;
-  event_end_time?: string;
-  created_at?: string;
-  banner_url?: string | null;
-  auto_import?: boolean;
-  ticketmaster_id?: string | null;
-  raw_event_data?: any;
-}
-
-// Function to generate UUID v4
-function generateUUID() {
-  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-    const r = Math.random() * 16 | 0;
-    const v = c === 'x' ? r : r & 0x3 | 0x8;
-    return v.toString(16);
-  });
-}
-
-serve(async (req) => {
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  }
-
-  if (req.method === 'OPTIONS') {
-    return new Response('ok', { headers: corsHeaders })
-  }
-
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+const supabase = createClient(Deno.env.get('SUPABASE_URL') ?? '', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
+const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN');
+const ACTOR_ID = Deno.env.get('TICKETMASTER_ACTOR_ID');
+serve(async (req)=>{
   try {
-    // Environment validation
-    const APIFY_TOKEN = Deno.env.get('APIFY_TOKEN')
-    const TICKETMASTER_ACTOR_ID = Deno.env.get('TICKETMASTER_ACTOR_ID')
-    
-    if (!APIFY_TOKEN) {
-      return new Response(
-        JSON.stringify({ error: 'APIFY_TOKEN environment variable is not set' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-    
-    if (!TICKETMASTER_ACTOR_ID) {
-      return new Response(
-        JSON.stringify({ error: 'TICKETMASTER_ACTOR_ID environment variable is not set' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // Initialize Supabase client with service role key for enhanced permissions
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
-    const supabase = createClient(supabaseUrl, supabaseServiceKey)
-
-    // Parse request
-    const url = new URL(req.url)
-    const action = url.searchParams.get('action') || 'import_latest_runs'
-
-    switch (action) {
-      case 'import_latest_runs':
-        return await importLatestRuns(supabase, APIFY_TOKEN, TICKETMASTER_ACTOR_ID, corsHeaders)
-      case 'import_run':
-        const runId = url.searchParams.get('runId')
-        if (!runId) {
-          return new Response(
-            JSON.stringify({ error: 'runId parameter is required for import_run action' }),
-            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-          )
-        }
-        return await importSpecificRun(supabase, APIFY_TOKEN, runId, corsHeaders)
-      default:
-        return new Response(
-          JSON.stringify({ error: 'Invalid action. Use import_latest_runs or import_run' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        )
-    }
-  } catch (error) {
-    console.error('Error in Edge Function:', error)
-    return new Response(
-      JSON.stringify({ 
-        error: 'Internal server error', 
-        details: error.message 
-      }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
-  }
-})
-
-async function importLatestRuns(supabase: any, apifyToken: string, actorId: string, corsHeaders: any) {
-  try {
-    console.log('🚀 Starting import of latest runs...')
-    
-    // Fetch recent runs
-    const runsResponse = await fetch(
-      `https://api.apify.com/v2/acts/${actorId}/runs?limit=20&desc=true`,
-      {
+    // Handle debug endpoint without authentication
+    if (req.url.includes('?debug=env')) {
+      return new Response(JSON.stringify({
+        APIFY_TOKEN: APIFY_TOKEN ? 'SET' : 'NOT SET',
+        ACTOR_ID: ACTOR_ID ? 'SET' : 'NOT SET',
+        APIFY_TOKEN_VALUE: APIFY_TOKEN,
+        ACTOR_ID_VALUE: ACTOR_ID,
+        allEnvKeys: Object.keys(Deno.env.toObject())
+      }), {
+        status: 200,
         headers: {
-          'Authorization': `Bearer ${apifyToken}`
+          'Content-Type': 'application/json'
         }
+      });
+    }
+    // Debug environment variables - show full values for debugging
+    console.log('Environment check:');
+    console.log('APIFY_TOKEN:', APIFY_TOKEN || 'NOT SET');
+    console.log('ACTOR_ID:', ACTOR_ID || 'NOT SET');
+    console.log('All env vars:');
+    console.log('SUPABASE_URL:', Deno.env.get('SUPABASE_URL') ? 'Set' : 'NOT SET');
+    console.log('SUPABASE_SERVICE_ROLE_KEY:', Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ? 'Set' : 'NOT SET');
+    // Check for missing environment variables
+    if (!APIFY_TOKEN) {
+      return new Response(JSON.stringify({
+        error: 'APIFY_TOKEN environment variable is not set'
+      }), {
+        status: 500
+      });
+    }
+    if (!ACTOR_ID) {
+      return new Response(JSON.stringify({
+        error: 'TICKETMASTER_ACTOR_ID environment variable is not set'
+      }), {
+        status: 500
+      });
+    }
+    // Handle both JSON requests and simple GET/POST requests
+    let action, payload = {};
+    try {
+      const body = await req.json();
+      action = body.action;
+      payload = {
+        ...body
+      };
+      delete payload.action;
+    } catch (error) {
+      // If JSON parsing fails, default to import_latest_runs
+      console.log('No JSON body provided, defaulting to import_latest_runs');
+      action = undefined;
+    }
+    // Default to import_latest_runs if no action specified
+    const actionToExecute = action || 'import_latest_runs';
+    switch(actionToExecute){
+      case 'import_latest_runs':
+        return await importLatestRuns();
+      case 'import_runs_by_date':
+        return await importRunsByDate(payload.date);
+      case 'import_specific_runs':
+        return await importSpecificRuns(payload.runIds);
+      case 'list_recent_runs':
+        return await listRecentRuns(payload.days || 7);
+      default:
+        return new Response(JSON.stringify({
+          error: 'Invalid action. Use: import_latest_runs, import_runs_by_date, import_specific_runs, or list_recent_runs'
+        }), {
+          status: 400
+        });
+    }
+  } catch (error) {
+    console.error('Error:', error);
+    return new Response(JSON.stringify({
+      error: error.message
+    }), {
+      status: 500
+    });
+  }
+});
+// Helper function to import runs from the latest date
+async function importLatestRuns() {
+  try {
+    console.log('Finding runs from the latest date...');
+    console.log('Using ACTOR_ID:', ACTOR_ID);
+    console.log('Using APIFY_TOKEN:', APIFY_TOKEN ? 'Set' : 'NOT SET');
+    // Construct the URL
+    const apiUrl = `https://api.apify.com/v2/acts/${ACTOR_ID}/runs?desc=true&limit=100`;
+    console.log('API URL:', apiUrl);
+    // Get all runs sorted by date (most recent first)
+    const runsResponse = await fetch(apiUrl, {
+      headers: {
+        'Authorization': `Bearer ${APIFY_TOKEN}`
       }
-    )
-
+    });
+    console.log('Response status:', runsResponse.status);
+    console.log('Response statusText:', runsResponse.statusText);
     if (!runsResponse.ok) {
-      throw new Error(`Failed to fetch runs: ${runsResponse.status} ${runsResponse.statusText}`)
+      // Get more details about the error
+      const errorText = await runsResponse.text();
+      console.log('Error response body:', errorText);
+      throw new Error(`Failed to fetch runs: ${runsResponse.statusText} - ${errorText}`);
     }
-
-    const runsData = await runsResponse.json()
-    console.log(`📦 Found ${runsData.data.length} recent runs`)
-
-    if (!runsData.data || runsData.data.length === 0) {
-      return new Response(
-        JSON.stringify({ message: 'No runs found', totalRuns: 0 }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    const { data: { items: allRuns } } = await runsResponse.json();
+    if (allRuns.length === 0) {
+      return new Response(JSON.stringify({
+        message: 'No runs found',
+        totalRuns: 0,
+        runsProcessed: []
+      }), {
+        status: 200
+      });
     }
-
-    // Get the latest date
-    const latestDate = runsData.data[0].startedAt.split('T')[0]
-    console.log(`📅 Latest run date: ${latestDate}`)
-
-    // Filter runs for the latest date
-    const latestRuns = runsData.data.filter((run: any) => 
-      run.startedAt.startsWith(latestDate) && run.status === 'SUCCEEDED'
-    )
-
-    console.log(`✅ Found ${latestRuns.length} successful runs from ${latestDate}`)
-
-    if (latestRuns.length === 0) {
-      return new Response(
-        JSON.stringify({ message: `No successful runs found for date ${latestDate}`, totalRuns: 0 }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
+    // Find the latest date among all runs
+    const latestRun = allRuns[0] // Already sorted by date desc
+    ;
+    const latestDate = latestRun.startedAt.split('T')[0] // Get just the date part
+    ;
+    console.log(`Latest date found: ${latestDate}`);
+    // Filter runs to only include those from the latest date
+    const latestDateRuns = allRuns.filter((run)=>run.startedAt.startsWith(latestDate));
+    console.log(`Found ${latestDateRuns.length} runs from ${latestDate}`);
+    // Import all runs from the latest date
+    return await importRunsList(latestDateRuns, `latest date (${latestDate})`);
+  } catch (error) {
+    console.error('Error importing latest runs:', error);
+    return new Response(JSON.stringify({
+      error: error.message
+    }), {
+      status: 500
+    });
+  }
+}
+// Helper function to import a list of runs
+async function importRunsList(runs, description) {
+  try {
+    console.log(`Starting import of ${runs.length} runs from ${description}`);
+    // Check which runs have already been processed to avoid re-processing
+    const runIds = runs.map((run)=>run.id);
+    const { data: existingRuns, error: checkError } = await supabase.from('apify_ticketmaster').select('apify_run_id').in('apify_run_id', runIds);
+    if (checkError) {
+      console.warn('Could not check existing runs, proceeding with all runs:', checkError.message);
     }
-
-    // Check which runs we've already processed
-    const runIds = latestRuns.map((run: any) => run.id)
-    const { data: processedRuns } = await supabase
-      .from('apify_runs_log')
-      .select('run_id')
-      .in('run_id', runIds)
-
-    const processedRunIds = new Set(processedRuns?.map((row: any) => row.run_id) || [])
-    const newRuns = latestRuns.filter((run: any) => !processedRunIds.has(run.id))
-
-    console.log(`🔄 Already processed: ${processedRunIds.size} runs`)
-    console.log(`🆕 New runs to process: ${newRuns.length} runs`)
-
-    if (newRuns.length === 0) {
-      return new Response(
-        JSON.stringify({ 
-          message: `All ${latestRuns.length} runs from ${latestDate} have already been processed`,
-          totalRuns: latestRuns.length,
+    const processedRunIds = new Set(existingRuns?.map((r)=>r.apify_run_id) || []);
+    const newRuns = runs.filter((run)=>!processedRunIds.has(run.id));
+    const existingRunsToUpdate = runs.filter((run)=>processedRunIds.has(run.id));
+    console.log(`📊 Run analysis:`);
+    console.log(`  - ${newRuns.length} new runs to process`);
+    console.log(`  - ${existingRunsToUpdate.length} runs already processed (will update)`);
+    console.log(`  - ${runs.length} total runs`);
+    console.log(`  - Processed run IDs:`, [
+      ...processedRunIds
+    ]);
+    console.log(`  - Current run IDs:`, runIds);
+    const runResults = [];
+    // Process all runs, but with awareness of which have been processed before
+    for (const run of runs){
+      try {
+        const isAlreadyProcessed = processedRunIds.has(run.id);
+        console.log(`Processing run ${run.id} (${isAlreadyProcessed ? 'UPDATE' : 'NEW'})...`);
+        const result = await importEventsFromRun(run.id, run.startedAt);
+        runResults.push({
+          runId: run.id,
+          startedAt: run.startedAt,
+          eventsImported: result.eventsImported,
+          newEvents: result.newEvents || 0,
+          updatedEvents: result.updatedEvents || 0,
+          status: 'success',
+          wasAlreadyProcessed: isAlreadyProcessed
+        });
+      } catch (error) {
+        console.error(`Error importing run ${run.id}:`, error);
+        runResults.push({
+          runId: run.id,
+          startedAt: run.startedAt,
+          eventsImported: 0,
           newEvents: 0,
-          updatedEvents: 0
-        }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      )
-    }
-
-    // Process each new run
-    let totalNewEvents = 0
-    let totalUpdatedEvents = 0
-    let geocodingCount = 0
-
-    for (const run of newRuns) {
-      console.log(`\n🔄 Processing run ${run.id}...`)
-      
-      try {
-        const result = await processRun(supabase, apifyToken, run.id)
-        totalNewEvents += result.newEvents
-        totalUpdatedEvents += result.updatedEvents
-        geocodingCount += result.geocodingCount
-        
-        // Log this run as processed
-        await supabase
-          .from('apify_runs_log')
-          .insert({
-            run_id: run.id,
-            started_at: run.startedAt,
-            finished_at: run.finishedAt,
-            events_imported: result.newEvents + result.updatedEvents,
-            processed_at: new Date().toISOString()
-          })
-
-        console.log(`✅ Run ${run.id}: ${result.newEvents} new, ${result.updatedEvents} updated`)
-      } catch (error) {
-        console.error(`❌ Error processing run ${run.id}:`, error)
-        // Continue with other runs even if one fails
+          updatedEvents: 0,
+          status: 'error',
+          error: error.message,
+          wasAlreadyProcessed: processedRunIds.has(run.id)
+        });
       }
     }
-
-    const response = {
-      message: `Successfully processed ${newRuns.length} runs from ${latestDate}`,
-      date: latestDate,
-      totalRuns: newRuns.length,
-      newEvents: totalNewEvents,
-      updatedEvents: totalUpdatedEvents,
-      geocodingCalls: geocodingCount,
-      processedRunIds: newRuns.map((run: any) => run.id)
-    }
-
-    console.log(`\n🎉 Import complete: ${totalNewEvents} new events, ${totalUpdatedEvents} updated events, ${geocodingCount} geocoding calls`)
-
-    return new Response(
-      JSON.stringify(response),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
-
+    const totalEventsImported = runResults.reduce((sum, result)=>sum + (result.eventsImported || 0), 0);
+    const totalNewEvents = runResults.reduce((sum, result)=>sum + (result.newEvents || 0), 0);
+    const totalUpdatedEvents = runResults.reduce((sum, result)=>sum + (result.updatedEvents || 0), 0);
+    return new Response(JSON.stringify({
+      message: `Import completed for ${description}`,
+      totalRuns: runs.length,
+      totalEventsImported,
+      totalNewEvents,
+      totalUpdatedEvents,
+      runsProcessed: runResults
+    }), {
+      status: 200
+    });
   } catch (error) {
-    console.error('Error in importLatestRuns:', error)
-    return new Response(
-      JSON.stringify({ 
-        error: 'Failed to import latest runs', 
-        details: error.message 
-      }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    console.error(`Error in importRunsList:`, error);
+    return new Response(JSON.stringify({
+      error: error.message
+    }), {
+      status: 500
+    });
   }
 }
-
-async function importSpecificRun(supabase: any, apifyToken: string, runId: string, corsHeaders: any) {
+// Helper function to import runs by specific date
+async function importRunsByDate(targetDate) {
   try {
-    console.log(`🎯 Processing specific run: ${runId}`)
-    
-    const result = await processRun(supabase, apifyToken, runId)
-    
-    const response = {
-      message: `Successfully processed run ${runId}`,
-      runId: runId,
-      newEvents: result.newEvents,
-      updatedEvents: result.updatedEvents,
-      totalEvents: result.newEvents + result.updatedEvents,
-      geocodingCalls: result.geocodingCount
+    console.log(`Fetching runs for date: ${targetDate}`);
+    const runsResponse = await fetch(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs?desc=true&limit=100`, {
+      headers: {
+        'Authorization': `Bearer ${APIFY_TOKEN}`
+      }
+    });
+    if (!runsResponse.ok) {
+      throw new Error(`Failed to fetch runs: ${runsResponse.statusText}`);
     }
-
-    console.log(`✅ Run ${runId}: ${result.newEvents} new, ${result.updatedEvents} updated, ${result.geocodingCount} geocoding calls`)
-
-    return new Response(
-      JSON.stringify(response),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
-
+    const { data: { items: allRuns } } = await runsResponse.json();
+    // Filter runs by target date
+    const targetRuns = allRuns.filter((run)=>run.startedAt.startsWith(targetDate));
+    console.log(`Found ${targetRuns.length} runs for ${targetDate}`);
+    return await importRunsList(targetRuns, `date ${targetDate}`);
   } catch (error) {
-    console.error('Error in importSpecificRun:', error)
-    return new Response(
-      JSON.stringify({ 
-        error: 'Failed to import specific run', 
-        details: error.message,
-        runId: runId
-      }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    )
+    console.error('Error importing runs by date:', error);
+    return new Response(JSON.stringify({
+      error: error.message
+    }), {
+      status: 500
+    });
   }
 }
-
-async function processRun(supabase: any, apifyToken: string, runId: string) {
-  // First get the run info to get the dataset ID
-  const runResponse = await fetch(
-    `https://api.apify.com/v2/acts/runs/${runId}`,
-    {
-      headers: {
-        'Authorization': `Bearer ${apifyToken}`
+// Helper function to import specific runs by IDs
+async function importSpecificRuns(runIds) {
+  try {
+    console.log(`Starting import of ${runIds.length} specific runs`);
+    const runResults = [];
+    for (const runId of runIds){
+      try {
+        const result = await importEventsFromRun(runId);
+        runResults.push({
+          runId: runId,
+          eventsImported: result.eventsImported,
+          newEvents: result.newEvents || 0,
+          updatedEvents: result.updatedEvents || 0,
+          status: 'success'
+        });
+      } catch (error) {
+        console.error(`Error importing run ${runId}:`, error);
+        runResults.push({
+          runId: runId,
+          eventsImported: 0,
+          newEvents: 0,
+          updatedEvents: 0,
+          status: 'error',
+          error: error.message
+        });
       }
     }
-  )
-
+    const totalEventsImported = runResults.reduce((sum, result)=>sum + (result.eventsImported || 0), 0);
+    const totalNewEvents = runResults.reduce((sum, result)=>sum + (result.newEvents || 0), 0);
+    const totalUpdatedEvents = runResults.reduce((sum, result)=>sum + (result.updatedEvents || 0), 0);
+    return new Response(JSON.stringify({
+      message: `Import completed for ${runIds.length} specific runs`,
+      totalRuns: runIds.length,
+      totalEventsImported,
+      totalNewEvents,
+      totalUpdatedEvents,
+      runsProcessed: runResults
+    }), {
+      status: 200
+    });
+  } catch (error) {
+    console.error('Error in importSpecificRuns:', error);
+    return new Response(JSON.stringify({
+      error: error.message
+    }), {
+      status: 500
+    });
+  }
+}
+// Helper function to list recent runs
+async function listRecentRuns(days) {
+  const sinceDate = new Date();
+  sinceDate.setDate(sinceDate.getDate() - days);
+  const runsResponse = await fetch(`https://api.apify.com/v2/acts/${ACTOR_ID}/runs?status=SUCCEEDED&limit=50`, {
+    headers: {
+      'Authorization': `Bearer ${APIFY_TOKEN}`
+    }
+  });
+  if (!runsResponse.ok) {
+    throw new Error(`Failed to fetch runs: ${runsResponse.statusText}`);
+  }
+  const runsData = await runsResponse.json();
+  const recentRuns = runsData.data.items.filter((run)=>new Date(run.startedAt) >= sinceDate).map((run)=>({
+      id: run.id,
+      startedAt: run.startedAt,
+      finishedAt: run.finishedAt,
+      status: run.status,
+      stats: run.stats,
+      buildNumber: run.buildNumber
+    }));
+  return new Response(JSON.stringify({
+    success: true,
+    days: days,
+    runsFound: recentRuns.length,
+    runs: recentRuns
+  }));
+}
+// Helper function to import events from a single run
+async function importEventsFromRun(runId, runStartedAt = null) {
+  console.log(`Importing events from run: ${runId}`);
+  // First get the run details to find the dataset ID
+  const runResponse = await fetch(`https://api.apify.com/v2/actor-runs/${runId}`, {
+    headers: {
+      'Authorization': `Bearer ${APIFY_TOKEN}`
+    }
+  });
   if (!runResponse.ok) {
-    throw new Error(`Failed to fetch run info: ${runResponse.status} ${runResponse.statusText}`)
+    throw new Error(`Failed to fetch run details for ${runId}: ${runResponse.statusText}`);
   }
-
-  const runData = await runResponse.json()
-  const datasetId = runData.data.defaultDatasetId
-
+  const runData = await runResponse.json();
+  const datasetId = runData.data.defaultDatasetId;
   if (!datasetId) {
-    throw new Error('No dataset found for this run')
+    console.log(`No dataset found for run ${runId}`);
+    return {
+      eventsImported: 0
+    };
   }
-
-  // Now fetch the dataset items
-  const datasetResponse = await fetch(
-    `https://api.apify.com/v2/datasets/${datasetId}/items?format=json`,
-    {
-      headers: {
-        'Authorization': `Bearer ${apifyToken}`
-      }
+  console.log(`Found dataset ID: ${datasetId} for run ${runId}`);
+  // Now get events from the dataset
+  const eventsResponse = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items`, {
+    headers: {
+      'Authorization': `Bearer ${APIFY_TOKEN}`
     }
-  )
-
-  if (!datasetResponse.ok) {
-    throw new Error(`Failed to fetch dataset: ${datasetResponse.status} ${datasetResponse.statusText}`)
+  });
+  if (!eventsResponse.ok) {
+    throw new Error(`Failed to fetch events from dataset ${datasetId}: ${eventsResponse.statusText}`);
   }
-
-  const events = await datasetResponse.json()
-  console.log(`📊 Found ${events.length} events in dataset ${datasetId}`)
-
-  if (events.length === 0) {
-    return { newEvents: 0, updatedEvents: 0, geocodingCount: 0 }
+  const rawEvents = await eventsResponse.json();
+  console.log(`Got ${rawEvents.length} raw events from run ${runId}`);
+  // Filter out unwanted events
+  const filteredEvents = rawEvents.filter((event)=>{
+    // Skip events with TBA
+    if (event.name && event.name.toLowerCase().includes('tba')) {
+      return false;
+    }
+    // Skip events with "Invalid date"
+    if (event.date && event.date.toLowerCase().includes('invalid date')) {
+      return false;
+    }
+    // Skip events with TBA in dateTitle
+    if (event.dateTitle && event.dateTitle.toLowerCase().includes('tba')) {
+      return false;
+    }
+    // Must have a name
+    if (!event.name || event.name.trim() === '') {
+      return false;
+    }
+    return true;
+  });
+  console.log(`Filtered to ${filteredEvents.length} valid events (removed ${rawEvents.length - filteredEvents.length} TBA/invalid events)`);
+  if (filteredEvents.length === 0) {
+    return {
+      eventsImported: 0
+    };
   }
-
-  let geocodingCount = 0
-
+  console.log(`Preparing ${filteredEvents.length} events for database upsert (insert/update)...`);
+  console.log(`Sample event IDs will be logged for debugging...`);
   // Prepare events for database insertion
-  const eventsToInsert: SupabaseEventRow[] = []
-  const generalEventsToInsert: GeneralEventRow[] = []
-
-  for (const event of events) {
-    // Generate consistent event ID for ticketmaster_events table
-    const ticketmasterEventId = generateEventId(event)
-    
-    // Generate unique event ID for general events table
-    const generalEventId = generateUUID()
-
-    // Prepare ticketmaster-specific event data
-    const ticketmasterEvent: SupabaseEventRow = {
-      id: ticketmasterEventId,
-      ticketmaster_id: event.id || null,
-      name: event.name || null,
-      type: event.type || null,
-      test: event.test || false,
+  const eventsToInsert = filteredEvents.map((event)=>{
+    // Create a more consistent unique event ID by normalizing the components
+    // Use the Ticketmaster ID if available, otherwise create a consistent composite key
+    let eventId;
+    if (event.id && typeof event.id === 'string' && event.id.trim() !== '') {
+      // Use Ticketmaster's native ID if available
+      eventId = event.id.trim();
+    } else if (event.event_id && typeof event.event_id === 'string' && event.event_id.trim() !== '') {
+      // Use event_id if available
+      eventId = event.event_id.trim();
+    } else {
+      // Create a consistent composite key by normalizing the components
+      const normalizedName = event.name?.trim().toLowerCase().replace(/[^a-z0-9]/g, '-') || 'unknown';
+      const normalizedVenue = event.venue?.name?.trim().toLowerCase().replace(/[^a-z0-9]/g, '-') || event.addressLocality?.trim().toLowerCase().replace(/[^a-z0-9]/g, '-') || 'unknown';
+      const normalizedDate = event.date || event.dateTitle || 'unknown';
+      eventId = `${normalizedName}-${normalizedVenue}-${normalizedDate}`.replace(/--+/g, '-');
+    }
+    // Parse date
+    let parsedDate = null;
+    if (event.date && event.date !== 'Invalid date') {
+      parsedDate = new Date(event.date).toISOString();
+    } else if (event.dateTitle && event.dateTitle !== 'Invalid date') {
+      // Try to parse dateTitle (format like "Nov 14")
+      const currentYear = new Date().getFullYear();
+      const dateStr = `${event.dateTitle} ${currentYear}`;
+      const parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) {
+        parsedDate = parsed.toISOString();
+      }
+    }
+    return {
+      event_id: eventId,
+      apify_run_id: runId,
+      // Basic event info
+      name: event.name,
+      description: event.description || null,
       url: event.url || null,
-      locale: event.locale || null,
-      images: event.images || null,
-      distance: event.distance || null,
-      units: event.units || null,
-      sales: event.sales || null,
-      dates: event.dates || null,
-      classifications: event.classifications || null,
-      outlet_id: event.outlets?.[0]?.id || null,
-      venue_id: event._embedded?.venues?.[0]?.id || null,
-      attractions: event._embedded?.attractions || null,
+      image: event.image || null,
+      // Date fields
+      date_time: parsedDate,
+      date_title: event.dateTitle || null,
+      date_sub_title: event.dateSubTitle || null,
+      // Location fields
+      address_country: event.addressCountry || null,
+      address_locality: event.addressLocality || null,
+      address_region: event.addressRegion || null,
+      postal_code: event.postalCode || null,
+      street_address: event.streetAddress || null,
+      place_url: event.placeUrl || null,
+      // Event classification
+      genre_name: event.genreName || null,
+      segment_name: event.segmentName || null,
+      // Pricing and offers (always update these as they may change)
       price_ranges: event.priceRanges || null,
-      products: event.products || null,
-      seat_map: event.seatmap || null,
-      accessibility: event.accessibility || null,
-      ticket_limit: event.ticketLimit || null,
-      age_restrictions: event.ageRestrictions || null,
-      code: event.code || null,
-      please_note: event.pleaseNote || null,
-      info: event.info || null,
-      promoter: event.promoter || null,
-      promoters: event.promoters || null,
-      social: event.social || null,
-      box_office_info: event.boxOfficeInfo || null,
-      general_info: event.generalInfo || null,
-      external_links: event.externalLinks || null,
-      version: event._links?.self?.href?.split('?')[1] || null,
-      updated_at: new Date().toISOString(),
-      raw_event_data: event,
-      apify_run_id: runId
-    }
-
-    eventsToInsert.push(ticketmasterEvent)
-
-    // Prepare general event data
-    const venue = event._embedded?.venues?.[0]
-    const locationName = venue ? `${venue.name}, ${venue.city?.name || ''}, ${venue.country?.name || ''}`.replace(/,\s*,/g, ',').replace(/,$/, '') : 'Location TBD'
-    
-    // Get venue coordinates using Mapbox geocoding
-    let locationGeometry: string | null = null
-    if (venue && (venue.city?.name || venue.address)) {
-      const locationQuery = venue.address ? 
-        `${venue.address.line1 || ''} ${venue.city?.name || ''} ${venue.country?.name || ''}`.trim() :
-        `${venue.city?.name || ''} ${venue.country?.name || ''}`.trim()
-      
-      if (locationQuery.length > 0) {
-        locationGeometry = await getLocationGeometry(locationQuery)
-        geocodingCount++
-        
-        // Add delay to avoid hitting rate limits
-        await new Promise(resolve => setTimeout(resolve, 100))
-      }
-    }
-
-    // Parse event dates
-    const startDate = parseEventDate(event.dates?.start?.localDate)
-    const endDate = parseEventDate(event.dates?.end?.localDate) || startDate
-    const startTime = parseEventTime(event.dates?.start?.localTime) || '19:00:00'
-    const endTime = parseEventTime(event.dates?.end?.localTime) || '23:00:00'
-
-    // Build description
-    let description = 'Event imported from Ticketmaster via Apify'
-    if (event.info) {
-      description += `\n\n${event.info}`
-    }
-    if (event.pleaseNote) {
-      description += `\n\nPlease note: ${event.pleaseNote}`
-    }
-    if (event._embedded?.attractions?.length > 0) {
-      const artists = event._embedded.attractions.map((a: any) => a.name).join(', ')
-      description += `\n\n🎤 Artists: ${artists}`
-    }
-    if (event.url) {
-      description += `\n\n🔗 Tickets: ${event.url}`
-    }
-
-    // Get banner image
-    const bannerUrl = event.images?.find((img: any) => 
-      img.ratio === '16_9' || img.ratio === '4_3'
-    )?.url || event.images?.[0]?.url || null
-
-    const generalEvent: GeneralEventRow = {
-      event_id: generalEventId,
-      title: event.name || 'Untitled Event',
-      description: description,
-      website_url: event.url || null,
-      location: locationGeometry,
-      location_name: locationName,
-      event_start_date: startDate,
-      event_end_date: endDate,
-      event_start_time: startTime,
-      event_end_time: endTime,
-      created_at: new Date().toISOString(),
-      banner_url: bannerUrl,
-      auto_import: true,
-      ticketmaster_id: event.id || null,
-      raw_event_data: event
-    }
-
-    generalEventsToInsert.push(generalEvent)
+      offer: event.offer || null,
+      // People/performers (may be updated with more details)
+      performers: event.performers || null,
+      // Original complex fields (for backwards compatibility)
+      venue: event.venue || null,
+      location: event.location || null,
+      prices: event.prices || null,
+      classifications: event.classifications || null,
+      // Metadata - always update these to track latest import
+      raw_data: event,
+      imported_at: new Date().toISOString(),
+      run_started_at: runStartedAt || new Date().toISOString()
+    };
+  });
+  // Check for duplicate event IDs within this batch
+  const eventIds = eventsToInsert.map((event)=>event.event_id);
+  const uniqueEventIds = new Set(eventIds);
+  if (eventIds.length !== uniqueEventIds.size) {
+    const duplicates = eventIds.filter((id, index)=>eventIds.indexOf(id) !== index);
+    console.warn(`⚠️  Found ${eventIds.length - uniqueEventIds.size} duplicate event IDs in this batch:`, [
+      ...new Set(duplicates)
+    ]);
   }
-
-  // Insert into both tables using parallel operations
-  console.log(`💾 Inserting ${eventsToInsert.length} events into both tables...`)
-
-  const [ticketmasterResult, generalResult] = await Promise.all([
-    supabase
-      .from('events')
-      .upsert(eventsToInsert, { 
-        onConflict: 'id',
-        count: 'exact',
-        defaultToNull: false
-      })
-      .select('id'),
-    
-    supabase
-      .from('general_events')
-      .upsert(generalEventsToInsert, {
-        onConflict: 'event_id',
-        count: 'exact',
-        defaultToNull: false
-      })
-      .select('event_id')
-  ])
-
-  if (ticketmasterResult.error) {
-    console.error('Ticketmaster events database error:', ticketmasterResult.error)
-    throw new Error(`Ticketmaster events insertion failed: ${ticketmasterResult.error.message}`)
+  console.log(`Generated ${uniqueEventIds.size} unique event IDs from ${eventsToInsert.length} events`);
+  // Check which events already exist to track updates vs inserts
+  console.log(`Checking for existing events among ${uniqueEventIds.size} event IDs...`);
+  const { data: existingEvents, error: checkError } = await supabase.from('apify_ticketmaster').select('event_id').in('event_id', [
+    ...uniqueEventIds
+  ]);
+  if (checkError) {
+    console.warn('Could not check existing events, proceeding with upsert:', checkError.message);
   }
-
-  if (generalResult.error) {
-    console.error('General events database error:', generalResult.error)
-    throw new Error(`General events insertion failed: ${generalResult.error.message}`)
+  const existingEventIds = new Set(existingEvents?.map((e)=>e.event_id) || []);
+  console.log(`Found ${existingEventIds.size} existing events in database`);
+  // Show some sample existing vs new event IDs for debugging
+  if (existingEventIds.size > 0) {
+    const sampleExisting = [
+      ...existingEventIds
+    ].slice(0, 3);
+    console.log(`Sample existing event IDs:`, sampleExisting);
   }
-
-  // Count how many were new vs updated (simplified approach)
-  const newEventsCount = ticketmasterResult.data?.length || 0
-  
-  // For better accuracy, we could check existing events before insertion
-  // For now, assume all are new if we got successful insertions
-  const newEvents = newEventsCount
-  const updatedEvents = 0 // Would need more complex logic to determine actual updates
-
-  console.log(`✅ Successfully inserted into both tables: ${newEvents} events`)
-
-  return { newEvents, updatedEvents, geocodingCount }
-}
-
-async function getLocationGeometry(locationName: string): Promise<string | null> {
-  try {
-    const accessToken = Deno.env.get('MAPBOX_ACCESS_TOKEN')
-    if (!accessToken) {
-      console.warn('MAPBOX_ACCESS_TOKEN not found, skipping geocoding')
-      return null
-    }
-
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(locationName)}.json?access_token=${accessToken}`
-        const response = await fetch(url)
-        
-        if (response.ok) {
-          const data = await response.json()
-          if (data.features && data.features.length > 0) {
-            const feature = data.features[0]
-            const [lon, lat] = feature.center
-            return `POINT(${lon} ${lat})`
-          }
-        }
-        
-        // If no results, try with simplified location name
-        if (attempt === 1 && locationName.includes(',')) {
-          const parts = locationName.split(',')
-          if (parts.length > 1) {
-            const simplifiedLocation = parts[0].trim()
-            const simplifiedUrl = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(simplifiedLocation)}.json?access_token=${accessToken}`
-            const simplifiedResponse = await fetch(simplifiedUrl)
-            if (simplifiedResponse.ok) {
-              const simplifiedData = await simplifiedResponse.json()
-              if (simplifiedData.features && simplifiedData.features.length > 0) {
-                const feature = simplifiedData.features[0]
-                const [lon, lat] = feature.center
-                return `POINT(${lon} ${lat})`
-              }
-            }
-          }
-        }
-        break
-      } catch (error) {
-        console.error(`Geocoding attempt ${attempt} failed for "${locationName}":`, error)
-        if (attempt < 3) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
-      }
-    }
-    return null
-  } catch (error) {
-    console.error(`Error getting coordinates for "${locationName}":`, error)
-    return null
+  const newEvents = eventsToInsert.filter((event)=>!existingEventIds.has(event.event_id));
+  const updateEvents = eventsToInsert.filter((event)=>existingEventIds.has(event.event_id));
+  if (newEvents.length > 0) {
+    const sampleNew = newEvents.slice(0, 3).map((e)=>e.event_id);
+    console.log(`Sample new event IDs:`, sampleNew);
   }
-}
-
-function parseEventDate(dateString: string | null): string | null {
-  if (!dateString) return null
-  
-  try {
-    // dateString should be in YYYY-MM-DD format from Ticketmaster
-    const date = new Date(dateString)
-    if (isNaN(date.getTime())) return null
-    
-    return date.toISOString().split('T')[0]
-  } catch (error) {
-    console.error(`Error parsing date "${dateString}":`, error)
-    return null
+  if (updateEvents.length > 0) {
+    const sampleUpdate = updateEvents.slice(0, 3).map((e)=>e.event_id);
+    console.log(`Sample update event IDs:`, sampleUpdate);
   }
-}
-
-function parseEventTime(timeString: string | null): string | null {
-  if (!timeString) return null
-  
-  try {
-    // timeString should be in HH:MM:SS format from Ticketmaster
-    if (timeString.match(/^\d{2}:\d{2}:\d{2}$/)) {
-      return timeString
-    }
-    // If it's just HH:MM, add :00
-    if (timeString.match(/^\d{2}:\d{2}$/)) {
-      return `${timeString}:00`
-    }
-    return null
-  } catch (error) {
-    console.error(`Error parsing time "${timeString}":`, error)
-    return null
+  // Check if any new event IDs are suspicious (might be duplicates with different formats)
+  if (newEvents.length > 0 && existingEventIds.size > 0) {
+    console.log(`🔍 Debugging potential ID mismatch:`);
+    console.log(`  Run ID: ${runId}`);
+    console.log(`  New events found: ${newEvents.length}`);
+    console.log(`  Expected: Most should be updates if run was already processed`);
   }
-}
-
-function generateEventId(event: any): string {
-  // If the event has a Ticketmaster ID, use it
-  if (event.id) {
-    return `tm_${event.id}`
+  console.log(`📊 Event analysis:`);
+  console.log(`  - ${newEvents.length} new events to insert`);
+  console.log(`  - ${updateEvents.length} existing events to update`);
+  console.log(`  - ${eventsToInsert.length} total events to process`);
+  // Insert into database with upsert to handle duplicates and updates
+  const { data, error } = await supabase.from('apify_ticketmaster').upsert(eventsToInsert, {
+    onConflict: 'event_id',
+    ignoreDuplicates: false // This ensures updates happen
+  }).select('event_id');
+  if (error) {
+    console.error('Database insert error:', error);
+    throw new Error(`Failed to insert events: ${error.message}`);
   }
-  
-  // Otherwise, create a consistent ID from available data
-  const name = (event.name || '').toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 50)
-  const venue = event._embedded?.venues?.[0]?.name || 'unknown_venue'
-  const venueNormalized = venue.toLowerCase().replace(/[^a-z0-9]/g, '_').substring(0, 30)
-  
-  // Use date if available
-  let dateStr = 'no_date'
-  if (event.dates?.start?.localDate) {
-    dateStr = event.dates.start.localDate.replace(/-/g, '_')
-  }
-  
-  return `event_${name}_${venueNormalized}_${dateStr}`.substring(0, 100)
+  console.log(`✅ Database operation completed successfully!`);
+  console.log(`📊 Import summary for run ${runId}:`);
+  console.log(`  - ${newEvents.length} new events inserted`);
+  console.log(`  - ${updateEvents.length} existing events updated`);
+  console.log(`  - ${eventsToInsert.length} total events processed`);
+  console.log(`  - ${data?.length || eventsToInsert.length} database records affected`);
+  return {
+    eventsImported: eventsToInsert.length,
+    newEvents: newEvents.length,
+    updatedEvents: updateEvents.length
+  };
 }
