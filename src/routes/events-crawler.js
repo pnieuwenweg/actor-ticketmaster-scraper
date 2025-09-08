@@ -210,8 +210,21 @@ async function handleEventsSearchPage(context, {
     let newLastEventDate = lastEventDate;
     if (actualEventsToProcess.length > 0) {
         const lastEvent = actualEventsToProcess[actualEventsToProcess.length - 1];
+        
+        // Try different possible date field structures
         if (lastEvent.localDate) {
             newLastEventDate = lastEvent.localDate;
+            log.info(`Found localDate for continuation: ${newLastEventDate}`);
+        } else if (lastEvent.dateTitle) {
+            // Convert dateTitle to a proper date format if possible
+            // This is a fallback, the localDate should be preferred
+            log.info(`Using dateTitle as fallback for continuation: ${lastEvent.dateTitle}`);
+            newLastEventDate = lastEvent.dateTitle;
+        } else {
+            log.warning(`No suitable date found in last event for continuation`, {
+                eventName: lastEvent.name,
+                availableFields: Object.keys(lastEvent).filter(key => key.toLowerCase().includes('date'))
+            });
         }
     }
     

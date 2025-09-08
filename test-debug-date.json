@@ -1,0 +1,13 @@
+{
+  "countryCode": "NL",
+  "distance": 100,
+  "maxItems": 200,
+  "categories": {
+    "concerts": true,
+    "sports": false,
+    "arts-theater": false,
+    "family": false
+  },
+  "continuationMode": true,
+  "autoContinue": true
+}
