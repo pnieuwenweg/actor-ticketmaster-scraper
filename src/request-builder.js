@@ -79,6 +79,11 @@ function buildRequestVariables({
 
     addDateVariable(variables, { thisWeekendDate, dateFrom, dateTo });
 
+    console.log('Final request variables:', {
+        ...variables,
+        classificationId: `[${variables.classificationId.length} items]` // Don't log the full array
+    });
+
     return variables;
 }
 
@@ -102,32 +107,70 @@ function getSortOptions(sortBy) {
 }
 
 function addDateVariable(variables, { thisWeekendDate, dateFrom, dateTo }) {
+    console.log('Date filter input:', { thisWeekendDate, dateFrom, dateTo });
+    
     if (thisWeekendDate) {
         variables.localStartEndDateTime = getWeekendDatesString();
+        console.log('Applied weekend filter:', variables.localStartEndDateTime);
     } else if (dateFrom && dateTo) {
         variables.localStartEndDateTime = getDateRangeString(dateFrom, dateTo);
+        console.log('Applied date range filter:', variables.localStartEndDateTime);
     } else if (dateFrom) {
         validateDateFormat(dateFrom);
-        variables.localStartDateTime = new Date(dateFrom);
+        const fromDate = new Date(dateFrom);
+        setDateFromHours(fromDate);
+        variables.localStartDateTime = convertDateToISOFormat(fromDate);
+        console.log('Applied dateFrom filter:', variables.localStartDateTime);
     } else if (dateTo) {
         validateDateFormat(dateTo);
-        variables.localEndDateTime = new Date(dateTo);
+        const toDate = new Date(dateTo);
+        setDateToHours(toDate);
+        variables.localEndDateTime = convertDateToISOFormat(toDate);
+        console.log('Applied dateTo filter:', variables.localEndDateTime);
+    } else {
+        console.log('No date filter applied');
     }
 }
 
 function getWeekendDatesString() {
-    const date = new Date();
-
-    const saturday = date.getDate() - (date.getDay() - 1) + 5;
-    const sunday = date.getDate() - (date.getDay() - 1) + 6;
-
-    const saturdayDate = new Date(date.setDate(saturday));
-    const sundayDate = new Date(date.setDate(sunday));
+    const now = new Date();
+    
+    // Calculate days until Saturday (6) and Sunday (0)
+    const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+    
+    let daysUntilSaturday, daysUntilSunday;
+    
+    if (currentDay === 0) { // It's Sunday
+        daysUntilSaturday = 6; // Next Saturday
+        daysUntilSunday = 0;   // Today
+    } else if (currentDay === 6) { // It's Saturday
+        daysUntilSaturday = 0; // Today
+        daysUntilSunday = 1;   // Tomorrow
+    } else { // Monday to Friday
+        daysUntilSaturday = 6 - currentDay; // Days until this Saturday
+        daysUntilSunday = 7 - currentDay;   // Days until this Sunday
+    }
+    
+    const saturdayDate = new Date(now);
+    saturdayDate.setDate(now.getDate() + daysUntilSaturday);
+    
+    const sundayDate = new Date(now);
+    sundayDate.setDate(now.getDate() + daysUntilSunday);
 
     setDateFromHours(saturdayDate);
     setDateToHours(sundayDate);
 
-    return `${convertDateToISOFormat(saturdayDate)},${convertDateToISOFormat(sundayDate)}`;
+    const result = `${convertDateToISOFormat(saturdayDate)},${convertDateToISOFormat(sundayDate)}`;
+    console.log('Weekend calculation:', {
+        currentDay,
+        daysUntilSaturday,
+        daysUntilSunday,
+        saturdayDate: saturdayDate.toISOString(),
+        sundayDate: sundayDate.toISOString(),
+        result
+    });
+    
+    return result;
 }
 
 function getDateRangeString(dateFrom, dateTo) {
@@ -150,11 +193,11 @@ function validateDateFormat(dateFormat) {
 }
 
 function setDateFromHours(date) {
-    date.setUTCHours(0, 0, 0);
+    date.setUTCHours(0, 0, 0, 0);
 }
 
 function setDateToHours(date) {
-    date.setUTCHours(23, 59, 59);
+    date.setUTCHours(23, 59, 59, 999);
 }
 
 function convertDateToISOFormat(date) {

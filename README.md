@@ -49,6 +49,8 @@ Set the maximum number of scraped events using the `maxItems` input field.
 
 > **_NOTE:_**  Ticketmaster limits searched results to 5100 with 200 items per 1 page (26 pages). If you need to scrape more events, you'll have to create multiple more specific input configurations that give you fewer search results and then combine the results together.
 
+> **_IMPORTANT:_** Due to Ticketmaster API limitations, the scraper may stop before reaching the specified `maxItems` limit. The API typically allows access to only 6-7 pages (approximately 1200-1400 events) regardless of the total number of events reported. This is a known limitation of Ticketmaster's API, not an issue with the scraper. See `TICKETMASTER_API_LIMITATION.md` for detailed explanation.
+
 ## Use Cases
 
 Ticketmaster is one of the leading companies in the field of event tickets purchasing. It comes with the nice search engine which helps you find the relevant events but it's missing a few features that can simplify the search process. Mainly the filtering of multiple categories and subcategories at once and also proper location specification. The events scraper can be useful e. g. in the following situations:

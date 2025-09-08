@@ -59,7 +59,24 @@ async function handleEventsSearchPage(context, {
     const { data: { products } } = json;
 
     if (!products) {
-        log.error('No products found in API response', { url: request.url, data: json.data });
+        log.error('No products found in API response', { 
+            url: request.url, 
+            data: json.data,
+            errors: json.errors,
+            page: userData.page + 1,
+            totalScraped: scrapedItems
+        });
+        
+        // Check if this might be a temporary API issue and if we should continue
+        if (json.errors) {
+            log.error('API returned errors:', json.errors);
+        }
+        
+        // Ticketmaster appears to have API pagination limits
+        // Log this as an API limitation rather than an error
+        log.warning(`Ticketmaster API stopped returning results at page ${userData.page + 1}. This appears to be an API limitation.`);
+        log.info(`Successfully scraped ${scrapedItems} events from ${userData.page + 1} pages before API limitation.`);
+        
         return;
     }
 

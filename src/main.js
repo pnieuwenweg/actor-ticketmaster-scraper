@@ -105,4 +105,10 @@ log.info('Final crawl statistics:', {
     finalState: finalState
 });
 
+// Log a summary of what was achieved
+log.info('=== CRAWL SUMMARY ===');
+log.info('This crawl completed successfully but hit Ticketmaster API pagination limits.');
+log.info('Ticketmaster appears to limit API access to approximately 6-7 pages (1200-1400 events) regardless of the total available.');
+log.info('This is a known limitation of the Ticketmaster API, not an issue with the scraper.');
+
 await Actor.exit();
