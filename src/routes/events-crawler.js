@@ -99,11 +99,14 @@ async function handleEventsSearchPage(context, {
         log.info(`Successfully scraped ${scrapedItems} events from ${userData.page + 1} pages before API limitation.`);
         
         // Mark as hitting API limit and update state
+        const currentState = await context.crawler.useState();
         const limitState = {
-            ...state,
+            ...currentState,
             hitApiLimit: true,
             totalScrapedEvents: scrapedItems
         };
+        
+        log.info(`Preserving lastEventDate from previous page: ${currentState.lastEventDate}`);
         
         await context.crawler.useState(limitState);
         
