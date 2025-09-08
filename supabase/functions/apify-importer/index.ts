@@ -328,6 +328,71 @@ async function getLocationGeometry(locationName, eventData) {
     return null;
   }
 }
+// Helper function to record run summary
+async function recordRunSummary(runId, runStartedAt, result) {
+  try {
+    // Create a basic summary object with only essential fields first
+    const basicSummary = {
+      apify_run_id: runId,
+      run_started_at: runStartedAt,
+      processed_at: new Date().toISOString(),
+      status: 'completed'
+    };
+
+    // Try to add additional fields if they exist in the table schema
+    try {
+      // First, try with all fields
+      const fullSummary = {
+        ...basicSummary,
+        events_imported: result.eventsImported || 0,
+        new_events: result.newEvents || 0,
+        updated_events: result.updatedEvents || 0,
+        main_table_inserts: result.mainTableInserts || 0,
+        geocoding_calls: result.geocodingCalls || 0,
+        geocoding_successful: result.geocodingSuccessful || 0
+      };
+
+      const { error } = await supabase.from('apify_run_summary').upsert(fullSummary, {
+        onConflict: 'apify_run_id'
+      });
+
+      if (error) {
+        if (error.code === 'PGRST204' || error.message?.includes('column')) {
+          // Column doesn't exist, try with basic summary only
+          console.warn(`⚠️  Some columns missing in apify_run_summary table, using basic summary for ${runId}`);
+          const { error: basicError } = await supabase.from('apify_run_summary').upsert(basicSummary, {
+            onConflict: 'apify_run_id'
+          });
+          
+          if (basicError) {
+            console.warn(`⚠️  Failed to record basic run summary for ${runId}:`, basicError);
+          } else {
+            console.log(`✅ Recorded basic run summary for ${runId} (table schema incomplete)`);
+          }
+        } else {
+          console.warn(`⚠️  Failed to record run summary for ${runId}:`, error);
+        }
+      } else {
+        console.log(`✅ Recorded complete run summary for ${runId}`);
+      }
+    } catch (schemaError) {
+      // Fallback to basic summary if there are schema issues
+      console.warn(`⚠️  Schema error, trying basic summary for ${runId}:`, schemaError);
+      const { error: basicError } = await supabase.from('apify_run_summary').upsert(basicSummary, {
+        onConflict: 'apify_run_id'
+      });
+      
+      if (basicError) {
+        console.warn(`⚠️  Failed to record basic run summary for ${runId}:`, basicError);
+      } else {
+        console.log(`✅ Recorded basic run summary for ${runId}`);
+      }
+    }
+  } catch (error) {
+    console.warn(`⚠️  Error recording run summary for ${runId}:`, error);
+  }
+}
+
 // Helper function to import runs from the latest date
 async function importLatestRuns() {
   try {
@@ -450,77 +515,97 @@ async function importRunsList(runs, description) {
     runsWithStats.forEach((run, index)=>{
       console.log(`  ${index + 1}. Run ${run.id}: ~${run.estimatedEvents} events`);
     });
-    // Check which runs have already been processed to avoid re-processing
+    // Check which runs have already been processed by looking at apify_run_summary
     const runIds = runsWithStats.map((run)=>run.id);
-    const { data: existingRuns, error: checkError } = await supabase.from('apify_ticketmaster').select('apify_run_id').in('apify_run_id', runIds);
-    if (checkError) {
-      console.warn('Could not check existing runs, proceeding with all runs:', checkError?.message || String(checkError) || 'Unknown error');
+    const { data: existingRunSummaries, error: summaryCheckError } = await supabase.from('apify_run_summary').select('apify_run_id').in('apify_run_id', runIds);
+    if (summaryCheckError) {
+      console.warn('Could not check existing run summaries, proceeding with all runs:', summaryCheckError?.message || String(summaryCheckError) || 'Unknown error');
     }
-    const processedRunIds = new Set(existingRuns?.map((r)=>r.apify_run_id) || []);
+    
+    const processedRunIds = new Set(existingRunSummaries?.map((r)=>r.apify_run_id) || []);
     const newRuns = runsWithStats.filter((run)=>!processedRunIds.has(run.id));
-    const existingRunsToUpdate = runsWithStats.filter((run)=>processedRunIds.has(run.id));
+    const existingRunsToSkip = runsWithStats.filter((run)=>processedRunIds.has(run.id));
+
     console.log(`📊 Run analysis:`);
     console.log(`  - ${newRuns.length} new runs to process`);
-    console.log(`  - ${existingRunsToUpdate.length} runs already processed (will update)`);
+    console.log(`  - ${existingRunsToSkip.length} runs already processed (will skip)`);
     console.log(`  - ${runsWithStats.length} total runs`);
     console.log(`  - Processed run IDs:`, [
       ...processedRunIds
     ]);
     console.log(`  - Current run IDs:`, runIds);
+
+    // Process only ONE run at a time
+    if (newRuns.length === 0) {
+      console.log(`ℹ️  No new runs to process - all runs already exist in apify_run_summary`);
+      return new Response(JSON.stringify({
+        message: `No new runs to process for ${description}`,
+        totalRuns: runs.length,
+        totalEventsImported: 0,
+        totalNewEvents: 0,
+        totalUpdatedEvents: 0,
+        runsProcessed: []
+      }), {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json'
+        },
+        status: 200
+      });
+    }
+
+    const runToProcess = newRuns[0]; // Process only the first new run
+    console.log(`🎯 Processing single run: ${runToProcess.id} (estimated: ${runToProcess.estimatedEvents} events)`);
+    
     const runResults = [];
     const startTime = Date.now();
-    const maxExecutionTime = 280000; // 280 seconds to stay under the 300s limit
-    // Process all runs, but with awareness of which have been processed before
-    for (const run of runsWithStats){
-      try {
-        const currentTime = Date.now();
-        const elapsedTime = currentTime - startTime;
-        if (elapsedTime > maxExecutionTime) {
-          console.warn(`⏰ Approaching time limit (${elapsedTime}ms), stopping processing`);
-          console.warn(`⏰ Remaining runs will need to be processed in a separate invocation`);
-          break;
-        }
-        const isAlreadyProcessed = processedRunIds.has(run.id);
-        console.log(`Processing run ${run.id} (${isAlreadyProcessed ? 'UPDATE' : 'NEW'}) - Estimated: ${run.estimatedEvents} events...`);
-        console.log(`⏰ Time elapsed: ${Math.round(elapsedTime / 1000)}s / ${Math.round(maxExecutionTime / 1000)}s`);
-        const result = await importEventsFromRun(run.id, run.startedAt);
-        runResults.push({
-          runId: run.id,
-          startedAt: run.startedAt,
-          eventsImported: result.eventsImported,
-          newEvents: result.newEvents || 0,
-          updatedEvents: result.updatedEvents || 0,
-          status: 'success',
-          wasAlreadyProcessed: isAlreadyProcessed,
-          estimatedEvents: run.estimatedEvents,
-          actualEvents: result.eventsImported
-        });
-      } catch (error) {
-        console.error(`Error importing run ${run.id}:`, error);
-        runResults.push({
-          runId: run.id,
-          startedAt: run.startedAt,
-          eventsImported: 0,
-          newEvents: 0,
-          updatedEvents: 0,
-          status: 'error',
-          error: error?.message || String(error) || 'Unknown error occurred',
-          wasAlreadyProcessed: processedRunIds.has(run.id),
-          estimatedEvents: run.estimatedEvents,
-          actualEvents: 0
-        });
-      }
+
+    // Process the single run
+    try {
+      const result = await importEventsFromRun(runToProcess.id, runToProcess.startedAt);
+      
+      // Record the run summary
+      await recordRunSummary(runToProcess.id, runToProcess.startedAt, result);
+      
+      runResults.push({
+        runId: runToProcess.id,
+        startedAt: runToProcess.startedAt,
+        eventsImported: result.eventsImported,
+        newEvents: result.newEvents || 0,
+        updatedEvents: result.updatedEvents || 0,
+        status: 'success',
+        wasAlreadyProcessed: false,
+        estimatedEvents: runToProcess.estimatedEvents,
+        actualEvents: result.eventsImported
+      });
+    } catch (error) {
+      console.error(`Error importing run ${runToProcess.id}:`, error);
+      runResults.push({
+        runId: runToProcess.id,
+        startedAt: runToProcess.startedAt,
+        eventsImported: 0,
+        newEvents: 0,
+        updatedEvents: 0,
+        status: 'error',
+        error: error?.message || String(error) || 'Unknown error occurred',
+        wasAlreadyProcessed: false,
+        estimatedEvents: runToProcess.estimatedEvents,
+        actualEvents: 0
+      });
     }
+
     const totalEventsImported = runResults.reduce((sum, result)=>sum + (result.eventsImported || 0), 0);
     const totalNewEvents = runResults.reduce((sum, result)=>sum + (result.newEvents || 0), 0);
     const totalUpdatedEvents = runResults.reduce((sum, result)=>sum + (result.updatedEvents || 0), 0);
+
     return new Response(JSON.stringify({
-      message: `Import completed for ${description}`,
-      totalRuns: runs.length,
+      message: `Import completed for ${description} - processed 1 run`,
+      totalRuns: 1,
       totalEventsImported,
       totalNewEvents,
       totalUpdatedEvents,
-      runsProcessed: runResults
+      runsProcessed: runResults,
+      remainingRuns: newRuns.length - 1
     }), {
       headers: {
         ...corsHeaders,
@@ -943,21 +1028,17 @@ async function geocodeStoredEvents(runId) {
         uniqueLocations.get(locationName).push(event);
       }
     }
-    console.log(`� Found ${uniqueLocations.size} unique locations to geocode (from ${storedEvents.length} events)`);
+    console.log(`🗺️  Found ${uniqueLocations.size} unique locations to geocode (from ${storedEvents.length} events)`);
     for (const [locationName, events] of uniqueLocations){
       try {
-        console.log(`🗺️  Geocoding location: "${locationName}" (${events.length} events)`);
         // Use the existing getLocationGeometry function with first event as sample
         const coordinates = await getLocationGeometry(locationName, events[0]);
         geocodedCount++;
         if (coordinates) {
           successCount++;
-          console.log(`✅ Successfully geocoded: ${locationName} (affects ${events.length} events)`);
-        } else {
-          console.log(`❌ Failed to geocode: ${locationName} (affects ${events.length} events)`);
         }
-        // Reduced delay to speed up processing
-        await new Promise((resolve)=>setTimeout(resolve, 50));
+        // Reduced delay to speed up processing and reduce CPU time
+        await new Promise((resolve)=>setTimeout(resolve, 25));
       } catch (error) {
         console.error(`❌ Error geocoding location ${locationName}:`, error);
       }
@@ -1075,7 +1156,7 @@ async function copyToMainEventsTable(runId) {
           }
         }
         // Build description
-        let description = `Event imported from Ticketmaster via Apify scraper`;
+        let description = `Event imported from Ticketmaster`;
         if (event.description) {
           description += `\n\n${event.description}`;
         }
@@ -1090,7 +1171,6 @@ async function copyToMainEventsTable(runId) {
           description += `\n\n🎤 Performers: ${event.performers.map((p)=>p.name || p).join(', ')}`;
         }
         description += `\n\n🔗 Ticketmaster URL: ${event.url || 'N/A'}`;
-        description += `\n\n📊 Imported via Apify run: ${runId}`;
         const eventForMainTable = {
           event_id: mainEventId,
           title: event.name,
@@ -1098,6 +1178,7 @@ async function copyToMainEventsTable(runId) {
           website_url: event.url,
           location: locationGeometry,
           location_name: locationName || 'Unknown location',
+          venue: event.venue,
           event_start_date: eventStartDate,
           event_end_date: eventEndDate,
           event_start_time: eventStartTime,
