@@ -5,3 +5,13 @@ node_modules
 
 storage
 response_examples
+
+# Environment variables and secrets
+.env
+.env.local
+.env.production
+*.key
+
+# Temporary files
+*.tmp
+*.log
