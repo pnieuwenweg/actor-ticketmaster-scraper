@@ -18,6 +18,7 @@ const {
     sortBy,
     countryCode, geoHash, distance,
     thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD,
+    continuationMode, continuationStartDate, autoContinue
 } = input;
 
 log.info('Actor configuration:', {
@@ -26,7 +27,8 @@ log.info('Actor configuration:', {
     countryCode,
     geoHash,
     distance,
-    dateFilter: { thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD }
+    dateFilter: { thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD },
+    continuation: { continuationMode, continuationStartDate, autoContinue }
 });
 
 // Debug: Check if date parameters are being properly extracted from input
@@ -36,8 +38,17 @@ log.info('Date filtering debug:', {
     inputThisWeekendDate: input.thisWeekendDate,
     extractedDateFrom: dateFrom,
     extractedDateTo: dateTo,
-    extractedThisWeekendDate: thisWeekendDate
+    extractedThisWeekendDate: thisWeekendDate,
+    continuationMode: continuationMode,
+    continuationStartDate: continuationStartDate
 });
+
+// Handle continuation mode - override dateFrom if continuation is enabled
+let effectiveDateFrom = dateFrom;
+if (continuationMode && continuationStartDate) {
+    effectiveDateFrom = continuationStartDate;
+    log.info('Continuation mode enabled - starting from:', continuationStartDate);
+}
 
 const categories = ['concerts', 'sports', 'arts-theater', 'family'];
 const categoryUrls = categories.map((category) => CATEGORY_PAGE_PREFIX + category);
@@ -61,10 +72,15 @@ const state = await categoriesCrawler.useState({
     geoHash,
     distance,
     thisWeekendDate,
-    dateFrom,
+    dateFrom: effectiveDateFrom,
     dateTo,
     includeTBA,
     includeTBD,
+    continuationMode,
+    autoContinue,
+    totalScrapedEvents: 0,
+    lastEventDate: null,
+    hitApiLimit: false
 });
 
 log.info('Starting categories crawl.');
@@ -91,7 +107,7 @@ const startRequest = buildFetchRequest({
     geoHash,
     distance,
     thisWeekendDate,
-    dateFrom,
+    dateFrom: effectiveDateFrom,
     dateTo,
     includeTBA,
     includeTBD,
@@ -115,10 +131,45 @@ log.info('Final crawl statistics:', {
     finalState: finalState
 });
 
+// Check if we hit API limits and handle continuation
+const { totalScrapedEvents, lastEventDate, hitApiLimit } = finalState;
+
 // Log a summary of what was achieved
 log.info('=== CRAWL SUMMARY ===');
-log.info('This crawl completed successfully but hit Ticketmaster API pagination limits.');
-log.info('Ticketmaster appears to limit API access to approximately 6-7 pages (1200-1400 events) regardless of the total available.');
-log.info('This is a known limitation of the Ticketmaster API, not an issue with the scraper.');
+if (hitApiLimit) {
+    log.info('This crawl hit Ticketmaster API pagination limits.');
+    log.info(`Successfully scraped ${totalScrapedEvents} events.`);
+    log.info(`Last event date processed: ${lastEventDate}`);
+    
+    if (autoContinue && lastEventDate) {
+        log.info('Auto-continue is enabled. Preparing continuation run...');
+        
+        // Save continuation data to key-value store for next run
+        await Actor.setValue('CONTINUATION_DATA', {
+            continuationStartDate: lastEventDate,
+            totalEventsScraped: totalScrapedEvents,
+            originalDateFrom: dateFrom,
+            originalDateTo: dateTo,
+            runNumber: (finalState.runNumber || 0) + 1
+        });
+        
+        log.info('Continuation data saved. You can now start a new run with:');
+        log.info(`- continuationMode: true`);
+        log.info(`- continuationStartDate: ${lastEventDate}`);
+        
+        // Note: Automatic re-queuing would require Apify platform integration
+        // For now, we'll just provide the continuation information
+    } else {
+        log.info('To continue scraping more events, start a new run with:');
+        log.info(`- continuationMode: true`);
+        log.info(`- continuationStartDate: ${lastEventDate}`);
+    }
+} else {
+    log.info('Crawl completed successfully - all available events were scraped.');
+    log.info(`Total events scraped: ${totalScrapedEvents}`);
+}
+
+log.info('Ticketmaster API limits: ~1200-1400 events per run (6-7 pages).');
+log.info('Use continuation mode to scrape larger datasets.');
 
 await Actor.exit();

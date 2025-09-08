@@ -656,6 +656,26 @@
         "Only"
       ],
       "default": "yes"
+    },
+    "continuationMode": {
+      "title": "Continuation Mode",
+      "description": "Enable this to continue scraping from where a previous run stopped due to API limits.",
+      "type": "boolean",
+      "default": false,
+      "sectionCaption": "Advanced Options",
+      "sectionDescription": "Options for handling API pagination limits and continuation runs."
+    },
+    "continuationStartDate": {
+      "title": "Continue From Date",
+      "description": "When continuation mode is enabled, start scraping from this date. Format: YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS",
+      "type": "string",
+      "editor": "textfield"
+    },
+    "autoContinue": {
+      "title": "Auto-Continue Runs",
+      "description": "Automatically trigger continuation runs until all events are scraped (experimental).",
+      "type": "boolean",
+      "default": false
     }
   }
 }

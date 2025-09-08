@@ -47,7 +47,46 @@ The actor is able to scrape approximately **20,000 events for 1 CU**. However, y
 
 Set the maximum number of scraped events using the `maxItems` input field.
 
-> **_NOTE:_**  Ticketmaster limits searched results to 5100 with 200 items per 1 page (26 pages). If you need to scrape more events, you'll have to create multiple more specific input configurations that give you fewer search results and then combine the results together.
+> **_NOTE:_** Ticketmaster limits API access to approximately 1200-1400 events per run (6-7 pages). If you need to scrape more events, use the **Continuation Mode** feature to chain multiple runs together and bypass this limitation.
+
+### Continuation Mode
+
+To scrape datasets larger than Ticketmaster's API limits (~1200 events), the actor supports continuation runs:
+
+#### How it works:
+1. **First run**: Set `continuationMode: false` and run normally until hitting API limits
+2. **Check logs**: Find the `lastEventDate` in the final logs (e.g., `"2025-11-25T19:30:00"`)
+3. **Continuation run**: Set `continuationMode: true` and `continuationStartDate` to the last event date
+4. **Repeat**: Continue until no more events are found
+
+#### Example workflow:
+```json
+// Run 1: Initial run
+{
+  "dateFrom": "2025-11-14",
+  "dateTo": "2025-12-31",
+  "continuationMode": false
+}
+// Result: ~1200 events, lastEventDate: "2025-11-25T19:30:00"
+
+// Run 2: Continuation
+{
+  "dateFrom": "2025-11-14", 
+  "dateTo": "2025-12-31",
+  "continuationMode": true,
+  "continuationStartDate": "2025-11-25T19:30:00"
+}
+// Result: Next ~1200 events, lastEventDate: "2025-12-05T20:00:00"
+
+// Run 3: Final continuation
+{
+  "continuationMode": true,
+  "continuationStartDate": "2025-12-05T20:00:00"
+}
+// Result: Remaining events, complete dataset
+```
+
+This allows you to scrape unlimited events by chaining multiple runs together.
 
 > **_IMPORTANT:_** Due to Ticketmaster API limitations, the scraper may stop before reaching the specified `maxItems` limit. The API typically allows access to only 6-7 pages (approximately 1200-1400 events) regardless of the total number of events reported. This is a known limitation of Ticketmaster's API, not an issue with the scraper. See `TICKETMASTER_API_LIMITATION.md` for detailed explanation.
 

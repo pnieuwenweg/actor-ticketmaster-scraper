@@ -19,6 +19,11 @@ eventsRouter.addDefaultHandler(async (context) => {
         dateTo,
         includeTBA,
         includeTBD,
+        continuationMode,
+        autoContinue,
+        totalScrapedEvents,
+        lastEventDate,
+        hitApiLimit
     } = state;
 
     await handleEventsSearchPage(context, {
@@ -32,6 +37,11 @@ eventsRouter.addDefaultHandler(async (context) => {
         dateTo,
         includeTBA,
         includeTBD,
+        continuationMode,
+        autoContinue,
+        totalScrapedEvents,
+        lastEventDate,
+        hitApiLimit
     });
 });
 
@@ -40,10 +50,14 @@ async function handleEventsSearchPage(context, {
     sortBy,
     countryCode, geoHash, distance,
     thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD,
+    continuationMode, autoContinue, totalScrapedEvents, lastEventDate, hitApiLimit
 }) {
     const { request, json } = context;
     const { url, userData } = request;
     const { scrapedItems, classifications } = userData;
+
+    // Get the current state to update it
+    const state = await context.crawler.useState();
 
     // Add comprehensive debugging
     await debugEventsHandler(context);
@@ -53,6 +67,13 @@ async function handleEventsSearchPage(context, {
 
     if (!json || !json.data) {
         log.error('No data received in API response', { url: request.url, json });
+        
+        // Mark as hitting API limit and update state
+        await context.crawler.useState({
+            ...state,
+            hitApiLimit: true,
+            totalScrapedEvents: scrapedItems
+        });
         return;
     }
 
@@ -76,6 +97,13 @@ async function handleEventsSearchPage(context, {
         // Log this as an API limitation rather than an error
         log.warning(`Ticketmaster API stopped returning results at page ${userData.page + 1}. This appears to be an API limitation.`);
         log.info(`Successfully scraped ${scrapedItems} events from ${userData.page + 1} pages before API limitation.`);
+        
+        // Mark as hitting API limit and update state
+        await context.crawler.useState({
+            ...state,
+            hitApiLimit: true,
+            totalScrapedEvents: scrapedItems
+        });
         
         return;
     }
@@ -132,20 +160,30 @@ async function handleEventsSearchPage(context, {
         }));
         log.info('Sample event dates from this page:', sampleDates);
         
-        // Check if we have any events before the filter date
-        const filterDate = new Date('2025-11-14');
-        const eventsBeforeFilter = events.filter(event => {
-            if (event.localDate) {
-                const eventDate = new Date(event.localDate);
-                return eventDate < filterDate;
+        // Check if we have any events before the filter date - but only if we have a dateFrom filter
+        const state = await context.crawler.useState();
+        if (state.dateFrom) {
+            const filterDate = new Date(state.dateFrom);
+            const eventsBeforeFilter = events.filter(event => {
+                if (event.localDate) {
+                    const eventDate = new Date(event.localDate);
+                    return eventDate < filterDate;
+                }
+                return false;
+            });
+            
+            if (eventsBeforeFilter.length > 0) {
+                log.warning(`Found ${eventsBeforeFilter.length} events before filter date (${state.dateFrom}) - date filter is NOT working properly`);
+                log.warning('Sample events before filter date:', eventsBeforeFilter.slice(0, 3).map(e => ({
+                    name: e.name,
+                    localDate: e.localDate,
+                    dateTitle: e.dateTitle
+                })));
+            } else {
+                log.info(`All events are on or after filter date (${state.dateFrom}) - date filter appears to be working`);
             }
-            return false;
-        }).length;
-        
-        if (eventsBeforeFilter > 0) {
-            log.warning(`Found ${eventsBeforeFilter} events before filter date (2025-11-14) - date filter may not be working properly`);
         } else {
-            log.info(`All events are on or after filter date (2025-11-14) - date filter appears to be working`);
+            log.info('No dateFrom filter applied - not checking event dates');
         }
     }
 
@@ -162,6 +200,23 @@ async function handleEventsSearchPage(context, {
     await Actor.pushData(actualEventsToProcess);
 
     const totalScrapedItems = scrapedItems + actualEventsToProcess.length;
+    
+    // Track the last event date for continuation
+    let newLastEventDate = lastEventDate;
+    if (actualEventsToProcess.length > 0) {
+        const lastEvent = actualEventsToProcess[actualEventsToProcess.length - 1];
+        if (lastEvent.localDate) {
+            newLastEventDate = lastEvent.localDate;
+        }
+    }
+    
+    // Update state with current progress
+    await context.crawler.useState({
+        ...state,
+        totalScrapedEvents: totalScrapedItems,
+        lastEventDate: newLastEventDate
+    });
+    
     log.info(`
     Total results available: ${page.totalElements}
     Total pages available: ${page.totalPages}
@@ -169,6 +224,12 @@ async function handleEventsSearchPage(context, {
     Events found on page: ${originalEventCount}
     Events actually processed: ${actualEventsToProcess.length}`, { url });
     log.info(`Total scraped events count: ${totalScrapedItems}`);
+    
+    // Check if we're approaching API limits (usually around 6-7 pages or 1200+ events)
+    const isNearApiLimit = (userData.page >= 5) || (totalScrapedItems >= 1000);
+    if (isNearApiLimit) {
+        log.info(`Approaching potential API limits (page ${userData.page + 1}, ${totalScrapedItems} events)`);
+    }
 
     // there are more events to scrape
     if (page.totalPages > userData.page + 1 && (!maxItems || totalScrapedItems < maxItems)) {
@@ -188,11 +249,28 @@ async function handleEventsSearchPage(context, {
         log.info(`Enqueuing next search request for page: ${userData.page + 2}`);
         await requestQueue.addRequest(nextRequest);
     } else {
+        // We've reached the end - determine if it's due to API limits or natural completion
+        let hitLimit = false;
+        
         if (page.totalPages <= userData.page + 1) {
             log.info(`Reached last page (${page.totalPages}). Crawling complete.`);
+            // Check if this might be due to API limits (if totalElements suggests more pages should exist)
+            const expectedPages = Math.ceil(page.totalElements / 200);
+            if (expectedPages > page.totalPages) {
+                log.warning(`Expected ${expectedPages} pages based on ${page.totalElements} total elements, but API only provided ${page.totalPages} pages. This suggests API pagination limits.`);
+                hitLimit = true;
+            }
         } else if (maxItems && totalScrapedItems >= maxItems) {
             log.info(`Reached maxItems limit (${maxItems}). Stopping crawl at ${totalScrapedItems} items.`);
         }
+        
+        // Update final state
+        await context.crawler.useState({
+            ...state,
+            hitApiLimit: hitLimit,
+            totalScrapedEvents: totalScrapedItems,
+            lastEventDate: newLastEventDate
+        });
     }
 }
 

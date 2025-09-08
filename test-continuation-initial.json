@@ -1,0 +1,16 @@
+{
+  "maxItems": 500,
+  "sortBy": "date",
+  "countryCode": "NL",
+  "distance": 100,
+  "concerts": true,
+  "sports": false,
+  "arts-theater": false,
+  "family": false,
+  "dateFrom": "2025-11-14",
+  "dateTo": "2025-12-31",
+  "includeTBA": "yes",
+  "includeTBD": "yes",
+  "continuationMode": false,
+  "autoContinue": false
+}
