@@ -1,6 +1,7 @@
 import { Actor } from 'apify';
 import { createCheerioRouter, log } from 'crawlee';
 import { buildFetchRequest } from '../request-builder.js';
+import { debugEventsHandler } from '../debug-handler.js';
 
 export const eventsRouter = createCheerioRouter();
 
@@ -44,36 +45,86 @@ async function handleEventsSearchPage(context, {
     const { url, userData } = request;
     const { scrapedItems, classifications } = userData;
 
+    // Add comprehensive debugging
+    await debugEventsHandler(context);
+
     log.info(`Scraping url:
     ${request.url}`);
+
+    if (!json || !json.data) {
+        log.error('No data received in API response', { url: request.url, json });
+        return;
+    }
 
     const { data: { products } } = json;
 
     if (!products) {
+        log.error('No products found in API response', { url: request.url, data: json.data });
         return;
     }
 
     const { page, items } = products;
 
-    log.info(`Found ${items.length} events`, { page: page.number });
+    log.info(`API Response structure:`, {
+        pageNumber: page.number,
+        totalPages: page.totalPages,
+        totalElements: page.totalElements,
+        itemsReceived: items ? items.length : 0,
+        url: request.url
+    });
+
+    if (!items || items.length === 0) {
+        log.warning(`No items found on page ${page.number + 1}`, {
+            pageInfo: page,
+            url: request.url
+        });
+        
+        // Check if we should continue to next page even with no items
+        if (page.totalPages > userData.page + 1) {
+            log.info('Continuing to next page despite no items on current page');
+            const { crawler: { requestQueue } } = context;
+            const nextRequest = buildFetchRequest({
+                sortBy,
+                countryCode,
+                geoHash,
+                distance,
+                thisWeekendDate,
+                dateFrom,
+                dateTo,
+                includeTBA,
+                includeTBD,
+            }, classifications, userData.page + 1, scrapedItems);
+
+            log.info(`Enqueuing next search request for page: ${userData.page + 2} (after empty page)`);
+            await requestQueue.addRequest(nextRequest);
+        }
+        return;
+    }
+
+    log.info(`Found ${items.length} events on page ${page.number + 1}`, { page: page.number });
 
     const events = getEventsFromResponse(items);
+    const originalEventCount = events.length;
 
     // handle maxItems restriction if set
+    let actualEventsToProcess = events;
     if (maxItems) {
         const remainingItemsCount = maxItems - scrapedItems;
         if (remainingItemsCount < events.length) {
-            events.splice(remainingItemsCount);
+            actualEventsToProcess = events.slice(0, remainingItemsCount);
+            log.info(`Limiting events to ${actualEventsToProcess.length} due to maxItems restriction (${remainingItemsCount} remaining)`);
         }
     }
 
-    await Actor.pushData(events);
+    await Actor.pushData(actualEventsToProcess);
 
-    const totalScrapedItems = scrapedItems + events.length;
+    const totalScrapedItems = scrapedItems + actualEventsToProcess.length;
     log.info(`
-    Total results: ${page.totalElements}
-    Total pages: ${page.totalPages}
-    Current page: ${userData.page + 1}`, { url });
+    Total results available: ${page.totalElements}
+    Total pages available: ${page.totalPages}
+    Current page: ${userData.page + 1}
+    Events found on page: ${originalEventCount}
+    Events actually processed: ${actualEventsToProcess.length}`, { url });
     log.info(`Total scraped events count: ${totalScrapedItems}`);
 
     // there are more events to scrape
@@ -91,8 +142,14 @@ async function handleEventsSearchPage(context, {
             includeTBD,
         }, classifications, userData.page + 1, totalScrapedItems);
 
-        log.info(`Enqueuing next search request for page: ${userData.page + 1}`);
+        log.info(`Enqueuing next search request for page: ${userData.page + 2}`);
         await requestQueue.addRequest(nextRequest);
+    } else {
+        if (page.totalPages <= userData.page + 1) {
+            log.info(`Reached last page (${page.totalPages}). Crawling complete.`);
+        } else if (maxItems && totalScrapedItems >= maxItems) {
+            log.info(`Reached maxItems limit (${maxItems}). Stopping crawl at ${totalScrapedItems} items.`);
+        }
     }
 }
 

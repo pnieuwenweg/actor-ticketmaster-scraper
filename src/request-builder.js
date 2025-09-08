@@ -40,6 +40,14 @@ classifications, page = 0, scrapedItems = 0) {
         userData: { page, classifications, scrapedItems },
     };
 
+    // Debug logging
+    console.log(`Generated request for page ${page}:`, {
+        page,
+        scrapedItems,
+        classificationsCount: classifications.length,
+        url: request.url.substring(0, 200) + '...' // Truncate for readability
+    });
+
     return request;
 }
 

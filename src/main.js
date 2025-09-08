@@ -20,6 +20,15 @@ const {
     thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD,
 } = input;
 
+log.info('Actor configuration:', {
+    maxItems,
+    sortBy,
+    countryCode,
+    geoHash,
+    distance,
+    dateFilter: { thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD }
+});
+
 const categories = ['concerts', 'sports', 'arts-theater', 'family'];
 const categoryUrls = categories.map((category) => CATEGORY_PAGE_PREFIX + category);
 
@@ -55,6 +64,17 @@ log.info('Categories crawl finished.');
 // whole input object passed as parameter as it contains large amount of bool properties representing classification IDs
 const classifications = parseClassificationsToScrape(input, state);
 
+log.info('Classifications parsing result:', {
+    classificationsCount: classifications.length,
+    classifications: classifications,
+    inputCategories: {
+        concerts: input.concerts,
+        sports: input.sports,
+        'arts-theater': input['arts-theater'],
+        family: input.family
+    }
+});
+
 const startRequest = buildFetchRequest({
     sortBy,
     countryCode,
@@ -78,5 +98,11 @@ await eventsCrawler.useState(state);
 log.info('Starting events crawl.');
 await eventsCrawler.run([startRequest]);
 log.info('Events crawl finished.');
+
+// Add final statistics
+const finalState = await eventsCrawler.useState();
+log.info('Final crawl statistics:', {
+    finalState: finalState
+});
 
 await Actor.exit();
