@@ -411,53 +411,17 @@ async function importLatestRuns() {
         status: 200
       });
     }
-    
-    // Show all available runs with their dates and event counts
-    console.log(`📊 Found ${allRuns.length} total runs. Analyzing all recent runs...`);
-    for (let i = 0; i < Math.min(15, allRuns.length); i++) {
-      const run = allRuns[i];
-      const runDate = run.startedAt.split('T')[0];
-      const runTime = run.startedAt.split('T')[1];
-      console.log(`  Run ${i+1}: ${run.id} - Date: ${runDate} ${runTime} - Status: ${run.status} - Finished: ${run.finishedAt ? 'Yes' : 'No'}`);
-    }
-    
     // Find the latest date among all runs
     const latestRun = allRuns[0] // Already sorted by date desc
     ;
     const latestDate = latestRun.startedAt.split('T')[0] // Get just the date part
     ;
     console.log(`Latest date found: ${latestDate}`);
-    
-    // Filter runs to include ALL runs from the latest date (not just successful ones)
-    const latestDateRuns = allRuns.filter((run) => {
-      const runDate = run.startedAt.split('T')[0];
-      return runDate === latestDate;
-    });
-    
-    console.log(`📅 Found ${latestDateRuns.length} runs from latest date: ${latestDate}`);
-    
-    // Show details of all runs from the latest date
-    latestDateRuns.forEach((run, index) => {
-      console.log(`  Latest date run ${index + 1}: ${run.id} - Status: ${run.status} - Started: ${run.startedAt} - Finished: ${run.finishedAt || 'N/A'}`);
-    });
-    
-    // Use only the latest date runs (not yesterday)
-    const recentRuns = latestDateRuns;
-    
-    // Group by date for better logging
-    const runsByDate: Record<string, any[]> = recentRuns.reduce((acc, run) => {
-      const date = run.startedAt.split('T')[0];
-      if (!acc[date]) acc[date] = [];
-      acc[date].push(run);
-      return acc;
-    }, {} as Record<string, any[]>);
-    
-    Object.entries(runsByDate).forEach(([date, runs]) => {
-      console.log(`  ${date}: ${runs.length} runs`);
-    });
-    
+    // Filter runs to only include those from the latest date
+    const latestDateRuns = allRuns.filter((run)=>run.startedAt.startsWith(latestDate));
+    console.log(`Found ${latestDateRuns.length} runs from ${latestDate}`);
     // Import all runs from the latest date
-    return await importRunsList(recentRuns, `latest date (${latestDate})`);
+    return await importRunsList(latestDateRuns, `latest date (${latestDate})`);
   } catch (error) {
     console.error('Error importing latest runs:', error);
     return new Response(JSON.stringify({
@@ -468,81 +432,32 @@ async function importLatestRuns() {
   }
 }
 // Helper function to import a list of runs
-async function importRunsList(runs: any[], description: string) {
+async function importRunsList(runs, description) {
   try {
     console.log(`Starting import of ${runs.length} runs from ${description}`);
-    
-    // Sort runs by number of events (smallest first) to process easier ones first
-    console.log(`📊 Analyzing runs before processing...`);
-    const runsWithStats: any[] = [];
-    for (const run of runs) {
-      try {
-        // Quick check to estimate run size without full processing
-        const runResponse = await fetch(`https://api.apify.com/v2/actor-runs/${run.id}`, {
-          headers: { 'Authorization': `Bearer ${APIFY_TOKEN}` }
-        });
-        if (runResponse.ok) {
-          const runData = await runResponse.json();
-          const stats = runData.data.stats || {};
-          runsWithStats.push({
-            ...run,
-            estimatedEvents: stats.outputItems || 0
-          });
-        } else {
-          runsWithStats.push({ ...run, estimatedEvents: 0 });
-        }
-      } catch (error) {
-        console.warn(`Could not get stats for run ${run.id}:`, error);
-        runsWithStats.push({ ...run, estimatedEvents: 0 });
-      }
-    }
-    
-    // Sort by estimated events (smallest first)
-    runsWithStats.sort((a, b) => a.estimatedEvents - b.estimatedEvents);
-    
-    console.log(`📊 Run processing order (smallest to largest):`);
-    runsWithStats.forEach((run, index) => {
-      console.log(`  ${index + 1}. Run ${run.id}: ~${run.estimatedEvents} events`);
-    });
-    
     // Check which runs have already been processed to avoid re-processing
-    const runIds = runsWithStats.map((run)=>run.id);
+    const runIds = runs.map((run)=>run.id);
     const { data: existingRuns, error: checkError } = await supabase.from('apify_ticketmaster').select('apify_run_id').in('apify_run_id', runIds);
     if (checkError) {
       console.warn('Could not check existing runs, proceeding with all runs:', checkError?.message || String(checkError) || 'Unknown error');
     }
     const processedRunIds = new Set(existingRuns?.map((r)=>r.apify_run_id) || []);
-    const newRuns = runsWithStats.filter((run)=>!processedRunIds.has(run.id));
-    const existingRunsToUpdate = runsWithStats.filter((run)=>processedRunIds.has(run.id));
+    const newRuns = runs.filter((run)=>!processedRunIds.has(run.id));
+    const existingRunsToUpdate = runs.filter((run)=>processedRunIds.has(run.id));
     console.log(`📊 Run analysis:`);
     console.log(`  - ${newRuns.length} new runs to process`);
     console.log(`  - ${existingRunsToUpdate.length} runs already processed (will update)`);
-    console.log(`  - ${runsWithStats.length} total runs`);
+    console.log(`  - ${runs.length} total runs`);
     console.log(`  - Processed run IDs:`, [
       ...processedRunIds
     ]);
     console.log(`  - Current run IDs:`, runIds);
-    
-    const runResults: any[] = [];
-    const startTime = Date.now();
-    const maxExecutionTime = 280000; // 280 seconds to stay under the 300s limit
-    
+    const runResults = [];
     // Process all runs, but with awareness of which have been processed before
-    for (const run of runsWithStats){
+    for (const run of runs){
       try {
-        const currentTime = Date.now();
-        const elapsedTime = currentTime - startTime;
-        
-        if (elapsedTime > maxExecutionTime) {
-          console.warn(`⏰ Approaching time limit (${elapsedTime}ms), stopping processing`);
-          console.warn(`⏰ Remaining runs will need to be processed in a separate invocation`);
-          break;
-        }
-        
         const isAlreadyProcessed = processedRunIds.has(run.id);
-        console.log(`Processing run ${run.id} (${isAlreadyProcessed ? 'UPDATE' : 'NEW'}) - Estimated: ${run.estimatedEvents} events...`);
-        console.log(`⏰ Time elapsed: ${Math.round(elapsedTime/1000)}s / ${Math.round(maxExecutionTime/1000)}s`);
-        
+        console.log(`Processing run ${run.id} (${isAlreadyProcessed ? 'UPDATE' : 'NEW'})...`);
         const result = await importEventsFromRun(run.id, run.startedAt);
         runResults.push({
           runId: run.id,
@@ -551,9 +466,7 @@ async function importRunsList(runs: any[], description: string) {
           newEvents: result.newEvents || 0,
           updatedEvents: result.updatedEvents || 0,
           status: 'success',
-          wasAlreadyProcessed: isAlreadyProcessed,
-          estimatedEvents: run.estimatedEvents,
-          actualEvents: result.eventsImported
+          wasAlreadyProcessed: isAlreadyProcessed
         });
       } catch (error) {
         console.error(`Error importing run ${run.id}:`, error);
@@ -565,9 +478,7 @@ async function importRunsList(runs: any[], description: string) {
           updatedEvents: 0,
           status: 'error',
           error: error?.message || String(error) || 'Unknown error occurred',
-          wasAlreadyProcessed: processedRunIds.has(run.id),
-          estimatedEvents: run.estimatedEvents,
-          actualEvents: 0
+          wasAlreadyProcessed: processedRunIds.has(run.id)
         });
       }
     }
@@ -624,10 +535,10 @@ async function importRunsByDate(targetDate) {
   }
 }
 // Helper function to import specific runs by IDs
-async function importSpecificRuns(runIds: any[]) {
+async function importSpecificRuns(runIds) {
   try {
     console.log(`Starting import of ${runIds.length} specific runs`);
-    const runResults: any[] = [];
+    const runResults = [];
     for (const runId of runIds){
       try {
         const result = await importEventsFromRun(runId);
@@ -994,93 +905,81 @@ async function geocodeStoredEvents(runId: string) {
     
     let geocodedCount = 0;
     let successCount = 0;
-    let skippedCount = 0;
-    
-    // Build unique location strings to avoid duplicate geocoding
-    const uniqueLocations = new Map<string, any[]>();
     
     for (const event of storedEvents) {
-      // Build address-based location string for geocoding
-      const addressParts: string[] = [];
-      
-      // Add street address first (most specific)
-      if (event.street_address && event.street_address.trim()) {
-        addressParts.push(event.street_address.trim());
-      }
-      
-      // Add locality (city)
-      if (event.address_locality && event.address_locality.trim()) {
-        addressParts.push(event.address_locality.trim());
-      }
-      
-      // Add postal code for better precision
-      if (event.postal_code && event.postal_code.trim()) {
-        addressParts.push(event.postal_code.trim());
-      }
-      
-      // Add region/state
-      if (event.address_region && event.address_region.trim()) {
-        addressParts.push(event.address_region.trim());
-      }
-      
-      // Add country
-      if (event.address_country && event.address_country.trim()) {
-        addressParts.push(event.address_country.trim());
-      }
-      
-      // Combine address parts
-      let locationName = addressParts.join(', ');
-      
-      // Fallback to venue name if no address components available
-      if (!locationName) {
-        const venueName = extractVenueName(event);
-        if (venueName !== 'Unknown venue') {
-          locationName = venueName;
-          if (event.address_locality) {
-            locationName += `, ${event.address_locality}`;
+      try {
+        // Build address-based location string for geocoding
+        const addressParts: string[] = [];
+        
+        // Add street address first (most specific)
+        if (event.street_address && event.street_address.trim()) {
+          addressParts.push(event.street_address.trim());
+        }
+        
+        // Add locality (city)
+        if (event.address_locality && event.address_locality.trim()) {
+          addressParts.push(event.address_locality.trim());
+        }
+        
+        // Add postal code for better precision
+        if (event.postal_code && event.postal_code.trim()) {
+          addressParts.push(event.postal_code.trim());
+        }
+        
+        // Add region/state
+        if (event.address_region && event.address_region.trim()) {
+          addressParts.push(event.address_region.trim());
+        }
+        
+        // Add country
+        if (event.address_country && event.address_country.trim()) {
+          addressParts.push(event.address_country.trim());
+        }
+        
+        // Combine address parts
+        let locationName = addressParts.join(', ');
+        
+        // Fallback to venue name if no address components available
+        if (!locationName) {
+          const venueName = extractVenueName(event);
+          if (venueName !== 'Unknown venue') {
+            locationName = venueName;
+            if (event.address_locality) {
+              locationName += `, ${event.address_locality}`;
+            }
           }
         }
-      }
-      
-      if (locationName.trim()) {
-        if (!uniqueLocations.has(locationName)) {
-          uniqueLocations.set(locationName, []);
-        }
-        uniqueLocations.get(locationName)!.push(event);
-      }
-    }
-    
-    console.log(`� Found ${uniqueLocations.size} unique locations to geocode (from ${storedEvents.length} events)`);
-    
-    for (const [locationName, events] of uniqueLocations) {
-      try {
-        console.log(`🗺️  Geocoding location: "${locationName}" (${events.length} events)`);
         
-        // Use the existing getLocationGeometry function with first event as sample
-        const coordinates = await getLocationGeometry(locationName, events[0]);
-        geocodedCount++;
-        
-        if (coordinates) {
-          successCount++;
-          console.log(`✅ Successfully geocoded: ${locationName} (affects ${events.length} events)`);
+        if (locationName.trim()) {
+          console.log(`🗺️  Geocoding event ${event.event_id}: "${locationName}"`);
+          
+          // Use the existing getLocationGeometry function
+          const coordinates = await getLocationGeometry(locationName, event);
+          geocodedCount++;
+          
+          if (coordinates) {
+            successCount++;
+            console.log(`✅ Successfully geocoded: ${locationName}`);
+          } else {
+            console.log(`❌ Failed to geocode: ${locationName}`);
+          }
+          
+          // Small delay to avoid overwhelming the API
+          await new Promise(resolve => setTimeout(resolve, 100));
         } else {
-          console.log(`❌ Failed to geocode: ${locationName} (affects ${events.length} events)`);
+          console.log(`⚠️  Skipping event ${event.event_id} - no location data available`);
         }
-        
-        // Reduced delay to speed up processing
-        await new Promise(resolve => setTimeout(resolve, 50));
         
       } catch (error) {
-        console.error(`❌ Error geocoding location ${locationName}:`, error);
+        console.error(`❌ Error geocoding event ${event.event_id}:`, error);
       }
     }
     
-    console.log(`✅ Phase 2 completed: ${successCount}/${geocodedCount} unique locations geocoded successfully`);
-    console.log(`📊 This affected ${storedEvents.length} total events`);
+    console.log(`✅ Phase 2 completed: ${successCount}/${geocodedCount} events geocoded successfully`);
     
     return {
-      geocodedCount: storedEvents.length, // Report total events affected
-      successCount: successCount * (storedEvents.length / geocodedCount) // Estimate successful events
+      geocodedCount,
+      successCount
     };
     
   } catch (error) {
@@ -1296,4 +1195,447 @@ async function copyToMainEventsTable(runId: string) {
       eventsInserted: 0
     };
   }
+}
+  const runResponse = await fetch(`https://api.apify.com/v2/actor-runs/${runId}`, {
+    headers: {
+      'Authorization': `Bearer ${APIFY_TOKEN}`
+    }
+  });
+  if (!runResponse.ok) {
+    throw new Error(`Failed to fetch run details for ${runId}: ${runResponse.statusText}`);
+  }
+  const runData = await runResponse.json();
+  const datasetId = runData.data.defaultDatasetId;
+  if (!datasetId) {
+    console.log(`No dataset found for run ${runId}`);
+    return {
+      eventsImported: 0
+    };
+  }
+  console.log(`Found dataset ID: ${datasetId} for run ${runId}`);
+  // Now get events from the dataset
+  const eventsResponse = await fetch(`https://api.apify.com/v2/datasets/${datasetId}/items`, {
+    headers: {
+      'Authorization': `Bearer ${APIFY_TOKEN}`
+    }
+  });
+  if (!eventsResponse.ok) {
+    throw new Error(`Failed to fetch events from dataset ${datasetId}: ${eventsResponse.statusText}`);
+  }
+  const rawEvents = await eventsResponse.json();
+  console.log(`Got ${rawEvents.length} raw events from run ${runId}`);
+  // Filter out unwanted events
+  const filteredEvents = rawEvents.filter((event)=>{
+    // Skip events with TBA
+    if (event.name && event.name.toLowerCase().includes('tba')) {
+      return false;
+    }
+    // Skip events with "Invalid date"
+    if (event.date && event.date.toLowerCase().includes('invalid date')) {
+      return false;
+    }
+    // Skip events with TBA in dateTitle
+    if (event.dateTitle && event.dateTitle.toLowerCase().includes('tba')) {
+      return false;
+    }
+    // Must have a name
+    if (!event.name || event.name.trim() === '') {
+      return false;
+    }
+    return true;
+  });
+  console.log(`Filtered to ${filteredEvents.length} valid events (removed ${rawEvents.length - filteredEvents.length} TBA/invalid events)`);
+  if (filteredEvents.length === 0) {
+    return {
+      eventsImported: 0
+    };
+  }
+  console.log(`Preparing ${filteredEvents.length} events for database upsert (insert/update)...`);
+  console.log(`Sample event IDs will be logged for debugging...`);
+  // Prepare events for database insertion
+  const eventsToInsert = filteredEvents.map((event)=>{
+    // Create a more consistent unique event ID by normalizing the components
+    // Use the Ticketmaster ID if available, otherwise create a consistent composite key
+    let eventId;
+    if (event.id && typeof event.id === 'string' && event.id.trim() !== '') {
+      // Use Ticketmaster's native ID if available
+      eventId = event.id.trim();
+    } else if (event.event_id && typeof event.event_id === 'string' && event.event_id.trim() !== '') {
+      // Use event_id if available
+      eventId = event.event_id.trim();
+    } else {
+      // Create a consistent composite key by normalizing the components
+      const normalizedName = event.name?.trim().toLowerCase().replace(/[^a-z0-9]/g, '-') || 'unknown';
+      const normalizedVenue = event.venue?.name?.trim().toLowerCase().replace(/[^a-z0-9]/g, '-') || event.addressLocality?.trim().toLowerCase().replace(/[^a-z0-9]/g, '-') || 'unknown';
+      const normalizedDate = event.date || event.dateTitle || 'unknown';
+      eventId = `${normalizedName}-${normalizedVenue}-${normalizedDate}`.replace(/--+/g, '-');
+    }
+    // Parse date
+    let parsedDate = null;
+    if (event.date && event.date !== 'Invalid date') {
+      parsedDate = new Date(event.date).toISOString();
+    } else if (event.dateTitle && event.dateTitle !== 'Invalid date') {
+      // Try to parse dateTitle (format like "Nov 14")
+      const currentYear = new Date().getFullYear();
+      const dateStr = `${event.dateTitle} ${currentYear}`;
+      const parsed = new Date(dateStr);
+      if (!isNaN(parsed.getTime())) {
+        parsedDate = parsed.toISOString();
+      }
+    }
+    return {
+      event_id: eventId,
+      apify_run_id: runId,
+      // Basic event info
+      name: event.name,
+      description: event.description || null,
+      url: event.url || null,
+      image: event.image || null,
+      // Date fields
+      date_time: parsedDate,
+      date_title: event.dateTitle || null,
+      date_sub_title: event.dateSubTitle || null,
+      // Location fields
+      address_country: event.addressCountry || null,
+      address_locality: event.addressLocality || null,
+      address_region: event.addressRegion || null,
+      postal_code: event.postalCode || null,
+      street_address: event.streetAddress || null,
+      place_url: event.placeUrl || null,
+      // Event classification
+      genre_name: event.genreName || null,
+      segment_name: event.segmentName || null,
+      // Pricing and offers (always update these as they may change)
+      price_ranges: event.priceRanges || null,
+      offer: event.offer || null,
+      // People/performers (may be updated with more details)
+      performers: event.performers || null,
+      // Original complex fields (for backwards compatibility)
+      venue: event.venue || null,
+      location: event.location || null,
+      prices: event.prices || null,
+      classifications: event.classifications || null,
+      // Metadata - always update these to track latest import
+      raw_data: event,
+      imported_at: new Date().toISOString(),
+      run_started_at: runStartedAt || new Date().toISOString()
+    };
+  });
+  // Check for duplicate event IDs within this batch
+  const eventIds = eventsToInsert.map((event)=>event.event_id);
+  const uniqueEventIds = new Set(eventIds);
+  if (eventIds.length !== uniqueEventIds.size) {
+    const duplicates = eventIds.filter((id, index)=>eventIds.indexOf(id) !== index);
+    console.warn(`⚠️  Found ${eventIds.length - uniqueEventIds.size} duplicate event IDs in this batch:`, [
+      ...new Set(duplicates)
+    ]);
+  }
+  console.log(`Generated ${uniqueEventIds.size} unique event IDs from ${eventsToInsert.length} events`);
+  // Check which events already exist to track updates vs inserts
+  console.log(`Checking for existing events among ${uniqueEventIds.size} event IDs...`);
+  const { data: existingEvents, error: checkError } = await supabase.from('apify_ticketmaster').select('event_id').in('event_id', [
+    ...uniqueEventIds
+  ]);
+  if (checkError) {
+    console.warn('Could not check existing events, proceeding with upsert:', checkError?.message || String(checkError) || 'Unknown error');
+  }
+  const existingEventIds = new Set(existingEvents?.map((e)=>e.event_id) || []);
+  console.log(`Found ${existingEventIds.size} existing events in database`);
+  // Show some sample existing vs new event IDs for debugging
+  if (existingEventIds.size > 0) {
+    const sampleExisting = [
+      ...existingEventIds
+    ].slice(0, 3);
+    console.log(`Sample existing event IDs:`, sampleExisting);
+  }
+  const newEvents = eventsToInsert.filter((event)=>!existingEventIds.has(event.event_id));
+  const updateEvents = eventsToInsert.filter((event)=>existingEventIds.has(event.event_id));
+  if (newEvents.length > 0) {
+    const sampleNew = newEvents.slice(0, 3).map((e)=>e.event_id);
+    console.log(`Sample new event IDs:`, sampleNew);
+  }
+  if (updateEvents.length > 0) {
+    const sampleUpdate = updateEvents.slice(0, 3).map((e)=>e.event_id);
+    console.log(`Sample update event IDs:`, sampleUpdate);
+  }
+  // Check if any new event IDs are suspicious (might be duplicates with different formats)
+  if (newEvents.length > 0 && existingEventIds.size > 0) {
+    console.log(`🔍 Debugging potential ID mismatch:`);
+    console.log(`  Run ID: ${runId}`);
+    console.log(`  New events found: ${newEvents.length}`);
+    console.log(`  Expected: Most should be updates if run was already processed`);
+  }
+  console.log(`📊 Event analysis:`);
+  console.log(`  - ${newEvents.length} new events to insert`);
+  console.log(`  - ${updateEvents.length} existing events to update`);
+  console.log(`  - ${eventsToInsert.length} total events to process`);
+  // Insert into database with upsert to handle duplicates and updates
+  const { data, error } = await supabase.from('apify_ticketmaster').upsert(eventsToInsert, {
+    onConflict: 'event_id',
+    ignoreDuplicates: false // This ensures updates happen
+  }).select('event_id');
+  if (error) {
+    console.error('Database insert error:', error);
+    throw new Error(`Failed to insert events: ${error?.message || String(error) || 'Unknown database error'}`);
+  }
+
+  console.log(`✅ Apify Ticketmaster table operation completed successfully!`);
+  
+  // Check for existing events in main table BEFORE geocoding to avoid unnecessary API calls
+  console.log(`Checking for existing events in main table to avoid duplicate geocoding...`);
+  const ticketmasterEventIds = eventsToInsert.map(e => e.event_id);
+  const { data: existingMainEvents, error: mainTableCheckError } = await supabase
+    .from('events')
+    .select('ticketmaster_event_id')
+    .in('ticketmaster_event_id', ticketmasterEventIds);
+  
+  if (mainTableCheckError) {
+    console.warn(`⚠️  Could not check existing events in main table (continuing with all events):`, mainTableCheckError?.message || String(mainTableCheckError) || 'Unknown error');
+  }
+  
+  const existingTicketmasterIds = new Set(existingMainEvents?.map(e => e.ticketmaster_event_id) || []);
+  
+  // Filter to only process events that don't exist in main table yet
+  const eventsToProcess = eventsToInsert.filter(event => 
+    !existingTicketmasterIds.has(event.event_id)
+  );
+  
+  console.log(`${eventsToProcess.length} new events to process for main table (${eventsToInsert.length - eventsToProcess.length} already exist - skipping geocoding)`);
+  
+  // Now prepare events for the main events table with geocoding (only for new events)
+  console.log(`Preparing ${eventsToProcess.length} new events for main events table with geocoding...`);
+  
+  let geocodingCount = 0;
+  let cacheHits = 0;
+  let apiCalls = 0;
+  const eventsForMainTable: any[] = [];
+  
+  for (const event of eventsToProcess) {
+    try {
+      // Generate unique event ID for main table
+      const mainEventId = generateUUID();
+      
+      // Build location name for geocoding using address fields instead of venue name
+      let locationName = '';
+      
+      // Extract venue name for display purposes
+      const venueName = extractVenueName(event);
+      
+      // Build address-based location string for better geocoding accuracy
+      const addressParts: string[] = [];
+      
+      // Add street address first (most specific)
+      if (event.street_address && event.street_address.trim()) {
+        addressParts.push(event.street_address.trim());
+      }
+      
+      // Add locality (city)
+      if (event.address_locality && event.address_locality.trim()) {
+        addressParts.push(event.address_locality.trim());
+      }
+      
+      // Add postal code for better precision
+      if (event.postal_code && event.postal_code.trim()) {
+        addressParts.push(event.postal_code.trim());
+      }
+      
+      // Add region/state
+      if (event.address_region && event.address_region.trim()) {
+        addressParts.push(event.address_region.trim());
+      }
+      
+      // Add country
+      if (event.address_country && event.address_country.trim()) {
+        addressParts.push(event.address_country.trim());
+      }
+      
+      // Combine address parts
+      locationName = addressParts.join(', ');
+      
+      // Fallback to venue name if no address components available
+      if (!locationName && venueName !== 'Unknown venue') {
+        locationName = venueName;
+        if (event.address_locality) {
+          locationName += `, ${event.address_locality}`;
+        }
+      }
+      
+      console.log(`🏢 Built address-based geocoding query: "${locationName}"`);
+      console.log(`   📍 Address parts: ${addressParts.length > 0 ? addressParts.join(' | ') : 'None available'}`);
+      console.log(`   🏢 Venue name: "${venueName}"`);
+      
+      // Get geometry for location
+      let locationGeometry = null;
+      if (locationName.trim()) {
+        console.log(`🗺️  Getting coordinates for "${event.name}" at "${locationName}"...`);
+        try {
+          locationGeometry = await getLocationGeometry(locationName, event);
+          geocodingCount++;
+          
+          if (locationGeometry) {
+            console.log(`✅ Successfully geocoded "${locationName}" -> ${locationGeometry}`);
+            // Check if this was a cache hit or API call by looking at the logs
+            // We'll track this in the summary differently
+          } else {
+            console.log(`❌ Failed to geocode "${locationName}" - no coordinates returned`);
+          }
+          
+          // Add small delay to avoid overwhelming Mapbox API
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (geocodingError) {
+          console.error(`❌ Error during geocoding for "${locationName}":`, geocodingError);
+          console.error(`❌ Geocoding error details:`, {
+            name: geocodingError?.name || 'Unknown',
+            message: geocodingError?.message || 'No message',
+            eventName: event.name
+          });
+          locationGeometry = null; // Ensure it's null on error
+        }
+      } else {
+        console.log(`⚠️  Skipping geocoding for "${event.name}" - no location name available`);
+      }
+      
+      // Parse dates for events table format
+      let eventStartDate: string | null = null;
+      let eventEndDate: string | null = null;
+      let eventStartTime = '12:00:00';
+      let eventEndTime = '23:59:00';
+      
+      if (event.date_time) {
+        const dateObj = new Date(event.date_time);
+        eventStartDate = dateObj.toISOString().split('T')[0];
+        eventEndDate = eventStartDate; // Default to same day
+        
+        // Extract time if available
+        const timeStr = dateObj.toISOString().split('T')[1];
+        if (timeStr && timeStr !== '00:00:00.000Z') {
+          eventStartTime = timeStr.split('.')[0];
+        }
+      }
+      
+      // Build description
+      let description = `Event imported from Ticketmaster via Apify scraper`;
+      if (event.description) {
+        description += `\n\n${event.description}`;
+      }
+      if (event.genre_name || event.segment_name) {
+        const genres = [event.genre_name, event.segment_name].filter(Boolean);
+        description += `\n\n🎵 Genre: ${genres.join(', ')}`;
+      }
+      if (event.performers && Array.isArray(event.performers) && event.performers.length > 0) {
+        description += `\n\n🎤 Performers: ${event.performers.map(p => p.name || p).join(', ')}`;
+      }
+      description += `\n\n🔗 Ticketmaster URL: ${event.url || 'N/A'}`;
+      description += `\n\n📊 Imported via Apify run: ${runId}`;
+      
+      const eventForMainTable = {
+        event_id: mainEventId,
+        title: event.name,
+        description: description,
+        website_url: event.url,
+        location: locationGeometry,
+        location_name: locationName || `${venueName}${event.address_locality ? `, ${event.address_locality}` : ''}`,
+        event_start_date: eventStartDate,
+        event_end_date: eventEndDate,
+        event_start_time: eventStartTime,
+        event_end_time: eventEndTime,
+        created_at: new Date().toISOString(),
+        banner_url: event.image,
+        auto_import: true,
+        ticketmaster_event_id: event.event_id
+      };
+      
+      eventsForMainTable.push(eventForMainTable);
+      
+    } catch (error) {
+      console.error(`Error preparing event ${event.name} for main table:`, error);
+      // Continue with other events even if one fails
+    }
+  }
+  
+  console.log(`Prepared ${eventsForMainTable.length} events for main table`);
+  
+  // Log geocoding summary
+  console.log(`🗺️  Geocoding Summary:`);
+  console.log(`   📍 Total geocoding attempts: ${geocodingCount}`);
+  console.log(`   ✅ Successfully geocoded: ${eventsForMainTable.filter(e => e.location).length}`);
+  console.log(`   ❌ Failed to geocode: ${eventsForMainTable.filter(e => !e.location).length}`);
+  
+  if (eventsForMainTable.length > 0) {
+    const sampleGeocoded = eventsForMainTable.filter(e => e.location).slice(0, 2);
+    const sampleFailed = eventsForMainTable.filter(e => !e.location).slice(0, 2);
+    
+    if (sampleGeocoded.length > 0) {
+      console.log(`   📋 Sample successful geocoding:`);
+      sampleGeocoded.forEach(event => {
+        console.log(`      "${event.location_name}" -> ${event.location}`);
+      });
+    }
+    
+    if (sampleFailed.length > 0) {
+      console.log(`   📋 Sample failed geocoding:`);
+      sampleFailed.forEach(event => {
+        console.log(`      "${event.location_name}" -> FAILED`);
+      });
+    }
+  }
+  
+  let mainTableInsertCount = 0;
+  if (eventsForMainTable.length > 0) {
+    console.log(`🗃️  Inserting ${eventsForMainTable.length} events into main events table...`);
+    
+    try {
+      // Insert into main events table (all events in eventsForMainTable are new)
+      const { data: mainTableData, error: mainTableError } = await supabase
+        .from('events')
+        .insert(eventsForMainTable)
+        .select('event_id');
+      
+      if (mainTableError) {
+        console.error('❌ Main events table insert error:', mainTableError);
+        console.error('❌ Error details:', {
+          message: mainTableError?.message || 'No message',
+          details: mainTableError?.details || 'No details',
+          hint: mainTableError?.hint || 'No hint',
+          code: mainTableError?.code || 'No code'
+        });
+        // Don't throw here - the apify_ticketmaster insert was successful
+      } else {
+        mainTableInsertCount = mainTableData?.length || 0;
+        console.log(`✅ Main events table operation completed successfully! Inserted ${mainTableInsertCount} events`);
+        
+        // Log some sample inserted event IDs for verification
+        if (mainTableData && mainTableData.length > 0) {
+          const sampleIds = mainTableData.slice(0, 3).map(e => e.event_id);
+          console.log(`📋 Sample inserted event IDs: ${sampleIds.join(', ')}`);
+        }
+      }
+    } catch (insertError) {
+      console.error('❌ Unexpected error during main table insert:', insertError);
+      console.error('❌ Insert error details:', {
+        name: insertError?.name || 'Unknown',
+        message: insertError?.message || 'No message',
+        stack: insertError?.stack?.substring(0, 300) || 'No stack trace'
+      });
+    }
+  } else {
+    console.log(`ℹ️  No new events to insert into main table - all ${eventsToInsert.length} events already exist`);
+  }
+
+  console.log(`📊 Import summary for run ${runId}:`);
+  console.log(`  - ${newEvents.length} new events inserted into apify_ticketmaster`);
+  console.log(`  - ${updateEvents.length} existing events updated in apify_ticketmaster`);
+  console.log(`  - ${mainTableInsertCount} new events inserted into main events table`);
+  console.log(`  - ${geocodingCount} geocoding requests processed`);
+  console.log(`  - Venue coordinates cached for future use`);
+  console.log(`  - ${eventsToInsert.length} total events processed`);
+  console.log(`  - ${data?.length || eventsToInsert.length} database records affected in apify_ticketmaster`);
+  
+  return {
+    eventsImported: eventsToInsert.length,
+    newEvents: newEvents.length,
+    updatedEvents: updateEvents.length,
+    mainTableInserts: mainTableInsertCount,
+    geocodingCalls: geocodingCount
+  };
 }
