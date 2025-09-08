@@ -100,13 +100,22 @@ async function handleEventsSearchPage(context, {
         
         // Mark as hitting API limit and update state
         const currentState = await context.crawler.useState();
+        
+        // Get the most recent lastEventDate from either current state or Actor store
+        let preservedLastEventDate = currentState.lastEventDate;
+        if (!preservedLastEventDate) {
+            const storedState = await Actor.getValue('CRAWLER_STATE');
+            preservedLastEventDate = storedState?.lastEventDate || null;
+        }
+        
         const limitState = {
             ...currentState,
             hitApiLimit: true,
-            totalScrapedEvents: scrapedItems
+            totalScrapedEvents: scrapedItems,
+            lastEventDate: preservedLastEventDate
         };
         
-        log.info(`Preserving lastEventDate from previous page: ${currentState.lastEventDate}`);
+        log.info(`Preserving lastEventDate when API limit hit: ${preservedLastEventDate}`);
         
         await context.crawler.useState(limitState);
         
