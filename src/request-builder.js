@@ -45,7 +45,7 @@ classifications, page = 0, scrapedItems = 0) {
         page,
         scrapedItems,
         classificationsCount: classifications.length,
-        url: request.url.substring(0, 200) + '...' // Truncate for readability
+        url: `${request.url.substring(0, 200)}...`, // Truncate for readability
     });
 
     return request;
@@ -81,7 +81,7 @@ function buildRequestVariables({
 
     console.log('Final request variables:', {
         ...variables,
-        classificationId: `[${variables.classificationId.length} items]` // Don't log the full array
+        classificationId: `[${variables.classificationId.length} items]`, // Don't log the full array
     });
 
     return variables;
@@ -108,7 +108,7 @@ function getSortOptions(sortBy) {
 
 function addDateVariable(variables, { thisWeekendDate, dateFrom, dateTo }) {
     console.log('Date filter input:', { thisWeekendDate, dateFrom, dateTo });
-    
+
     if (thisWeekendDate) {
         variables.localStartEndDateTime = getWeekendDatesString();
         console.log('Applied weekend filter:', variables.localStartEndDateTime);
@@ -137,26 +137,27 @@ function addDateVariable(variables, { thisWeekendDate, dateFrom, dateTo }) {
 
 function getWeekendDatesString() {
     const now = new Date();
-    
+
     // Calculate days until Saturday (6) and Sunday (0)
     const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-    
-    let daysUntilSaturday, daysUntilSunday;
-    
+
+    let daysUntilSaturday; let
+        daysUntilSunday;
+
     if (currentDay === 0) { // It's Sunday
         daysUntilSaturday = 6; // Next Saturday
-        daysUntilSunday = 0;   // Today
+        daysUntilSunday = 0; // Today
     } else if (currentDay === 6) { // It's Saturday
         daysUntilSaturday = 0; // Today
-        daysUntilSunday = 1;   // Tomorrow
+        daysUntilSunday = 1; // Tomorrow
     } else { // Monday to Friday
         daysUntilSaturday = 6 - currentDay; // Days until this Saturday
-        daysUntilSunday = 7 - currentDay;   // Days until this Sunday
+        daysUntilSunday = 7 - currentDay; // Days until this Sunday
     }
-    
+
     const saturdayDate = new Date(now);
     saturdayDate.setDate(now.getDate() + daysUntilSaturday);
-    
+
     const sundayDate = new Date(now);
     sundayDate.setDate(now.getDate() + daysUntilSunday);
 
@@ -170,9 +171,9 @@ function getWeekendDatesString() {
         daysUntilSunday,
         saturdayDate: saturdayDate.toISOString(),
         sundayDate: sundayDate.toISOString(),
-        result
+        result,
     });
-    
+
     return result;
 }
 

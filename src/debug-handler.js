@@ -9,11 +9,11 @@ export async function debugEventsHandler(context) {
 
     // Log request details
     log.info('=== REQUEST DEBUG INFO ===', {
-        url: url,
+        url,
         page: userData.page,
         scrapedItems: userData.scrapedItems,
         statusCode: response?.statusCode,
-        headers: response?.headers
+        headers: response?.headers,
     });
 
     // Log response structure
@@ -22,19 +22,19 @@ export async function debugEventsHandler(context) {
         hasData: !!(json && json.data),
         hasProducts: !!(json && json.data && json.data.products),
         responseKeys: json ? Object.keys(json) : [],
-        dataKeys: (json && json.data) ? Object.keys(json.data) : []
+        dataKeys: (json && json.data) ? Object.keys(json.data) : [],
     });
 
     if (json && json.data && json.data.products) {
         const { page, items } = json.data.products;
-        
+
         log.info('=== PRODUCTS DEBUG INFO ===', {
             currentPage: page.number,
             totalPages: page.totalPages,
             totalElements: page.totalElements,
             itemsCount: items ? items.length : 0,
             expectedPage: userData.page,
-            pageDiscrepancy: page.number !== userData.page
+            pageDiscrepancy: page.number !== userData.page,
         });
 
         // Check for any errors or warnings in the response
