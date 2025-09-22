@@ -1,7 +1,7 @@
 import { Actor } from 'apify';
 import { createCheerioRouter, log } from 'crawlee';
-import { buildFetchRequest } from '../request-builder.js';
-import { debugEventsHandler } from '../debug-handler.js';
+import { buildFetchRequest } from '../request-builder';
+import { debugEventsHandler } from '../debug-handler';
 
 export const eventsRouter = createCheerioRouter();
 
@@ -50,7 +50,6 @@ async function handleEventsSearchPage(context, {
     sortBy,
     countryCode, geoHash, distance,
     thisWeekendDate, dateFrom, dateTo, includeTBA, includeTBD,
-    continuationMode, autoContinue, totalScrapedEvents, lastEventDate, hitApiLimit,
 }) {
     const { request, json } = context;
     const { url, userData } = request;
@@ -178,9 +177,9 @@ async function handleEventsSearchPage(context, {
         log.info('Sample event dates from this page:', sampleDates);
 
         // Check if we have any events before the filter date - but only if we have a dateFrom filter
-        const state = await context.crawler.useState();
-        if (state.dateFrom) {
-            const filterDate = new Date(state.dateFrom);
+        const currentState = await context.crawler.useState();
+        if (currentState.dateFrom) {
+            const filterDate = new Date(currentState.dateFrom);
             const eventsBeforeFilter = events.filter((event) => {
                 if (event.localDate) {
                     const eventDate = new Date(event.localDate);
@@ -219,7 +218,7 @@ async function handleEventsSearchPage(context, {
     const totalScrapedItems = scrapedItems + actualEventsToProcess.length;
 
     // Track the last event date for continuation
-    let newLastEventDate = lastEventDate;
+    let newLastEventDate = state.lastEventDate;
     if (actualEventsToProcess.length > 0) {
         const lastEvent = actualEventsToProcess[actualEventsToProcess.length - 1];
 
@@ -292,7 +291,8 @@ async function handleEventsSearchPage(context, {
             // Check if this might be due to API limits (if totalElements suggests more pages should exist)
             const expectedPages = Math.ceil(page.totalElements / 200);
             if (expectedPages > page.totalPages) {
-                log.warning(`Expected ${expectedPages} pages based on ${page.totalElements} total elements, but API only provided ${page.totalPages} pages. This suggests API pagination limits.`);
+                log.warning(`Expected ${expectedPages} pages based on ${page.totalElements} total elements, `
+                    + `but API only provided ${page.totalPages} pages. This suggests API pagination limits.`);
                 hitLimit = true;
             }
         } else if (maxItems && totalScrapedItems >= maxItems) {

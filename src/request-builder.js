@@ -1,4 +1,5 @@
 import { URL, URLSearchParams } from 'url';
+import { log } from 'crawlee';
 
 export function buildFetchRequest({
     sortBy,
@@ -41,7 +42,7 @@ classifications, page = 0, scrapedItems = 0) {
     };
 
     // Debug logging
-    console.log(`Generated request for page ${page}:`, {
+    log.info(`Generated request for page ${page}:`, {
         page,
         scrapedItems,
         classificationsCount: classifications.length,
@@ -79,7 +80,7 @@ function buildRequestVariables({
 
     addDateVariable(variables, { thisWeekendDate, dateFrom, dateTo });
 
-    console.log('Final request variables:', {
+    log.info('Final request variables:', {
         ...variables,
         classificationId: `[${variables.classificationId.length} items]`, // Don't log the full array
     });
@@ -107,31 +108,31 @@ function getSortOptions(sortBy) {
 }
 
 function addDateVariable(variables, { thisWeekendDate, dateFrom, dateTo }) {
-    console.log('Date filter input:', { thisWeekendDate, dateFrom, dateTo });
+    log.info('Date filter input:', { thisWeekendDate, dateFrom, dateTo });
 
     if (thisWeekendDate) {
         variables.localStartEndDateTime = getWeekendDatesString();
-        console.log('Applied weekend filter:', variables.localStartEndDateTime);
+        log.info('Applied weekend filter:', variables.localStartEndDateTime);
     } else if (dateFrom && dateTo) {
         variables.localStartEndDateTime = getDateRangeString(dateFrom, dateTo);
-        console.log('Applied date range filter:', variables.localStartEndDateTime);
+        log.info('Applied date range filter:', variables.localStartEndDateTime);
     } else if (dateFrom) {
         // FIX: When only dateFrom is provided, automatically set an end date far in the future
         // This is necessary because Ticketmaster API requires BOTH start and end dates to filter properly
         validateDateFormat(dateFrom);
         const defaultEndDate = '2030-12-31'; // Far future date
         variables.localStartEndDateTime = getDateRangeString(dateFrom, defaultEndDate);
-        console.log('Applied dateFrom filter with auto end date:', variables.localStartEndDateTime);
-        console.log('NOTE: Auto-added end date (2030-12-31) because Ticketmaster requires both start and end dates');
+        log.info('Applied dateFrom filter with auto end date:', variables.localStartEndDateTime);
+        log.info('NOTE: Auto-added end date (2030-12-31) because Ticketmaster requires both start and end dates');
     } else if (dateTo) {
         // When only dateTo is provided, start from current date
         const currentDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
         validateDateFormat(dateTo);
         variables.localStartEndDateTime = getDateRangeString(currentDate, dateTo);
-        console.log('Applied dateTo filter with auto start date:', variables.localStartEndDateTime);
-        console.log('NOTE: Auto-added start date (today) because Ticketmaster requires both start and end dates');
+        log.info('Applied dateTo filter with auto start date:', variables.localStartEndDateTime);
+        log.info('NOTE: Auto-added start date (today) because Ticketmaster requires both start and end dates');
     } else {
-        console.log('No date filter applied');
+        log.info('No date filter applied');
     }
 }
 
@@ -165,7 +166,7 @@ function getWeekendDatesString() {
     setDateToHours(sundayDate);
 
     const result = `${convertDateToISOFormat(saturdayDate)},${convertDateToISOFormat(sundayDate)}`;
-    console.log('Weekend calculation:', {
+    log.info('Weekend calculation:', {
         currentDay,
         daysUntilSaturday,
         daysUntilSunday,

@@ -1,11 +1,9 @@
-import { Actor } from 'apify';
 import { log } from 'crawlee';
 
 // Enhanced debugging for events crawler
 export async function debugEventsHandler(context) {
     const { request, json, response } = context;
     const { url, userData } = request;
-    const { scrapedItems, classifications } = userData;
 
     // Log request details
     log.info('=== REQUEST DEBUG INFO ===', {
